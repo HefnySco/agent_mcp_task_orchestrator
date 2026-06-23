@@ -191,6 +191,24 @@ export class SequentialService {
   }
 
   /**
+   * Create multiple tasks in batch
+   * @param tasks - Array of task creation inputs
+   * @returns Array of created tasks
+   * @throws DependencyNotFoundError if a dependency task doesn't exist
+   * @throws Error if circular dependency is detected
+   */
+  createTasks(tasks: CreateTaskInput[]): Task[] {
+    const createdTasks: Task[] = [];
+    
+    for (const task of tasks) {
+      const createdTask = this.createTask(task);
+      createdTasks.push(createdTask);
+    }
+    
+    return createdTasks;
+  }
+
+  /**
    * Check for circular dependencies in task graph
    * @param taskId - The new task ID being created
    * @param dependencies - Dependencies of the new task

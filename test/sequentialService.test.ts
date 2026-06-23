@@ -83,6 +83,81 @@ describe('SequentialService', () => {
     });
   });
 
+  describe('createTasks', () => {
+    it('should create a single task using batch method', () => {
+      const tasks = service.createTasks([
+        { name: 'Test Task' }
+      ]);
+
+      assert.strictEqual(tasks.length, 1);
+      assert.strictEqual(tasks[0].name, 'Test Task');
+      assert.strictEqual(tasks[0].status, TASK_STATUS.PENDING);
+      assert.ok(tasks[0].id);
+      assert.ok(tasks[0].createdAt);
+      assert.ok(tasks[0].updatedAt);
+    });
+
+    it('should create multiple tasks in one call', () => {
+      const tasks = service.createTasks([
+        { name: 'Task 1' },
+        { name: 'Task 2' },
+        { name: 'Task 3' }
+      ]);
+
+      assert.strictEqual(tasks.length, 3);
+      assert.strictEqual(tasks[0].name, 'Task 1');
+      assert.strictEqual(tasks[1].name, 'Task 2');
+      assert.strictEqual(tasks[2].name, 'Task 3');
+    });
+
+    it('should generate unique IDs for each task in batch', () => {
+      const tasks = service.createTasks([
+        { name: 'Task 1' },
+        { name: 'Task 2' }
+      ]);
+
+      assert.notStrictEqual(tasks[0].id, tasks[1].id);
+    });
+
+    it('should create tasks with optional fields in batch', () => {
+      const tasks = service.createTasks([
+        { name: 'Task 1', description: 'Description 1' },
+        { name: 'Task 2', metadata: { key: 'value' } }
+      ]);
+
+      assert.strictEqual(tasks[0].description, 'Description 1');
+      assert.deepStrictEqual(tasks[1].metadata, { key: 'value' });
+    });
+
+    it('should create tasks with dependencies in batch', () => {
+      const parentTask = service.createTask({ name: 'Parent Task' });
+      const tasks = service.createTasks([
+        { name: 'Child 1', parentTaskId: parentTask.id },
+        { name: 'Child 2', parentTaskId: parentTask.id }
+      ]);
+
+      assert.strictEqual(tasks.length, 2);
+      assert.strictEqual(tasks[0].parentTaskId, parentTask.id);
+      assert.strictEqual(tasks[1].parentTaskId, parentTask.id);
+    });
+
+    it('should throw error when dependency does not exist in batch', () => {
+      assert.throws(() => {
+        service.createTasks([
+          { name: 'Task 1', dependencies: ['non-existent-id'] }
+        ]);
+      });
+    });
+
+    it('should throw error when parent task does not exist in batch', () => {
+      assert.throws(() => {
+        service.createTasks([
+          { name: 'Child Task', parentTaskId: 'non-existent-parent-id' }
+        ]);
+      });
+    });
+  });
+
   describe('updateTask', () => {
     it('should update an existing task', () => {
       const task = service.createTask({ name: 'Original Name' });

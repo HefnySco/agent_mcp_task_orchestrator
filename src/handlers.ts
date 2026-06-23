@@ -9,6 +9,7 @@ import {
 import type { Task } from './types.js';
 import { 
   CreateTaskSchema, 
+  CreateTasksSchema,
   UpdateTaskSchema, 
   TaskIdSchema,
   CreateWorkflowSchema,
@@ -36,48 +37,44 @@ interface HandlerContext {
 }
 
 /**
- * Create task handler
+ * Create tasks handler (batch)
  */
-export async function handleCreateTask(
+export async function handleCreateTasks(
   context: HandlerContext,
   args: Record<string, unknown>
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const { service, logger } = context;
 
   // Validate input
-  const validated = CreateTaskSchema.parse(args);
+  const validated = CreateTasksSchema.parse(args);
 
-  const task = service.createTask({
-    name: validated.name,
-    description: validated.description,
-    dependencies: validated.dependencies,
-    parentTaskId: validated.parentTaskId,
-    metadata: validated.metadata,
-    maxRetries: validated.maxRetries
-  });
+  const tasks = service.createTasks(validated.tasks);
 
   await service.forceSave();
 
-  let parentInfo = '';
-  if (task.parentTaskId) {
-    const parentTask = service.getTask(task.parentTaskId);
-    if (parentTask) {
-      parentInfo = `\n**Parent Task:** ${parentTask.name} (ID: ${task.parentTaskId})`;
-    } else {
-      parentInfo = `\n**Parent Task ID:** ${task.parentTaskId}`;
+  const taskSummaries = tasks.map(task => {
+    let parentInfo = '';
+    if (task.parentTaskId) {
+      const parentTask = service.getTask(task.parentTaskId);
+      if (parentTask) {
+        parentInfo = `\n  **Parent Task:** ${parentTask.name} (ID: ${task.parentTaskId})`;
+      } else {
+        parentInfo = `\n  **Parent Task ID:** ${task.parentTaskId}`;
+      }
     }
-  }
+    return `- **${task.name}** (ID: ${task.id})${parentInfo}`;
+  }).join('\n');
 
   const result = {
     content: [
       {
         type: 'text',
-        text: `✅ Task created successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}\n**Dependencies:** ${task.dependencies.length}${parentInfo}\n**Created:** ${task.createdAt}`
+        text: `✅ ${tasks.length} task(s) created successfully\n\n${taskSummaries}`
       }
     ]
   };
 
-  await logger.logToolRequest('create_task', args, result);
+  await logger.logToolRequest('create_tasks', args, result);
   return result;
 }
 
@@ -296,11 +293,17 @@ export async function handleExecuteTask(
 
   await service.forceSave();
 
+  // Format result safely to avoid JSON parsing issues
+  let resultText = `✅ Task executed successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}`;
+  if (task.completedAt) {
+    resultText += `\n**Completed:** ${task.completedAt}`;
+  }
+
   const result = {
     content: [
       {
         type: 'text',
-        text: `✅ Task executed successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}\n**Completed:** ${task.completedAt}`
+        text: resultText
       }
     ]
   };
@@ -926,7 +929,7 @@ export async function handleGetNextWorkflowTasks(
  * Handler registry mapping tool names to their handlers
  */
 export const handlerRegistry: Record<string, (context: HandlerContext, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>> = {
-  create_task: handleCreateTask,
+  create_tasks: handleCreateTasks,
   update_task: handleUpdateTask,
   delete_task: handleDeleteTask,
   get_task: handleGetTask,

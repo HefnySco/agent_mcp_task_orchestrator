@@ -54,40 +54,50 @@ class SequentialMCPServer {
       return {
         tools: [
           {
-            name: 'create_task',
-            description: 'Create a new task with optional dependencies and parent task',
+            name: 'create_tasks',
+            description: 'Create one or more tasks with optional dependencies and parent tasks',
             inputSchema: {
               type: 'object',
               properties: {
-                name: {
-                  type: 'string',
-                  description: 'The name of the task'
-                },
-                description: {
-                  type: 'string',
-                  description: 'Optional description of the task'
-                },
-                dependencies: {
+                tasks: {
                   type: 'array',
                   items: {
-                    type: 'string'
+                    type: 'object',
+                    properties: {
+                      name: {
+                        type: 'string',
+                        description: 'The name of the task'
+                      },
+                      description: {
+                        type: 'string',
+                        description: 'Optional description of the task'
+                      },
+                      dependencies: {
+                        type: 'array',
+                        items: {
+                          type: 'string'
+                        },
+                        description: 'Array of task IDs that this task depends on'
+                      },
+                      parentTaskId: {
+                        type: 'string',
+                        description: 'Optional parent task ID for creating subtasks'
+                      },
+                      metadata: {
+                        type: 'object',
+                        description: 'Optional metadata for the task'
+                      },
+                      maxRetries: {
+                        type: 'number',
+                        description: 'Maximum number of retry attempts for this task'
+                      }
+                    },
+                    required: ['name']
                   },
-                  description: 'Array of task IDs that this task depends on'
-                },
-                parentTaskId: {
-                  type: 'string',
-                  description: 'Optional parent task ID for creating subtasks'
-                },
-                metadata: {
-                  type: 'object',
-                  description: 'Optional metadata for the task'
-                },
-                maxRetries: {
-                  type: 'number',
-                  description: 'Maximum number of retry attempts for this task'
+                  description: 'Array of tasks to create'
                 }
               },
-              required: ['name']
+              required: ['tasks']
             }
           },
           {

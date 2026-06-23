@@ -20,6 +20,13 @@ export const CreateTaskSchema = z.object({
 });
 
 /**
+ * Zod schema for creating multiple tasks (batch)
+ */
+export const CreateTasksSchema = z.object({
+  tasks: z.array(CreateTaskSchema).min(1, 'At least one task is required')
+});
+
+/**
  * Zod schema for updating a task
  */
 export const UpdateTaskSchema = z.object({

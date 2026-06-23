@@ -366,7 +366,7 @@ class SequentialMCPServer {
           },
           {
             name: 'advance_workflow_run',
-            description: 'Advance a workflow run by finding newly unlocked tasks after tasks are completed/failed. Respects the full dependency graph and returns updated run state with new ready tasks.',
+            description: 'Advance a workflow run by finding newly unlocked tasks after tasks are completed/failed. Returns detailed information including completed tasks, failed tasks, newly ready tasks, blocked tasks, workflow status, and a human-readable summary. Supports smart failure handling that only fails the workflow when no paths forward remain (unless continueOnFailure is enabled).',
             inputSchema: {
               type: 'object',
               properties: {

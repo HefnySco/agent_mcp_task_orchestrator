@@ -9,7 +9,8 @@ import type {
   TaskExecutionResult,
   TaskStats,
   WorkflowRun,
-  Workflow
+  Workflow,
+  WorkflowRunStatus
 } from './types.js';
 import {
   StorageError,
@@ -647,105 +648,289 @@ export class SequentialService {
   }
 
   /**
+   * Check for task timeouts and fail them if exceeded
+   * @param task - Task to check
+   * @returns True if task timed out and was failed
+   */
+  private checkTaskTimeout(task: Task): boolean {
+    if (task.status === TASK_STATUS.IN_PROGRESS && task.timeoutMs && task.startedAt) {
+      const startedTime = new Date(task.startedAt).getTime();
+      const currentTime = Date.now();
+      const elapsed = currentTime - startedTime;
+      
+      if (elapsed > task.timeoutMs) {
+        this.failTask(task.id, `Task timed out after ${elapsed}ms (timeout: ${task.timeoutMs}ms)`);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Check if a task can be retried
+   * @param task - Task to check
+   * @returns True if task can be retried
+   */
+  private canRetryTask(task: Task): boolean {
+    return task.maxRetries !== undefined && task.retries !== undefined && task.retries < task.maxRetries;
+  }
+
+  /**
+   * Process active tasks to find newly completed or failed tasks
+   * @param activeTaskIds - Currently active task IDs
+   * @param completedTaskIds - Already completed task IDs in the workflow
+   * @param workflowTaskIds - All task IDs in the workflow
+   * @param continueOnFailure - Whether to continue on task failures
+   * @returns Object with newly completed and failed task IDs
+   */
+  private processActiveTasks(
+    activeTaskIds: string[],
+    completedTaskIds: string[],
+    workflowTaskIds: string[],
+    continueOnFailure: boolean
+  ): { newlyCompleted: string[]; newlyFailed: string[] } {
+    const newlyCompleted: string[] = [];
+    const newlyFailed: string[] = [];
+
+    // Check active tasks for completion/failure
+    for (const activeTaskId of activeTaskIds) {
+      const task = this.state.tasks.get(activeTaskId);
+      if (!task) continue;
+
+      // Check for timeout first
+      if (this.checkTaskTimeout(task)) {
+        newlyCompleted.push(activeTaskId);
+        continue;
+      }
+
+      if (task.status === TASK_STATUS.COMPLETED) {
+        newlyCompleted.push(activeTaskId);
+      } else if (task.status === TASK_STATUS.FAILED) {
+        if (this.canRetryTask(task)) {
+          // Can be retried, don't mark as failed for workflow
+          continue;
+        }
+        newlyFailed.push(activeTaskId);
+      }
+    }
+
+    // Also check for tasks that were manually completed/failed outside of workflow
+    // These are tasks in the workflow that are completed/failed but not in completedTaskIds
+    for (const taskId of workflowTaskIds) {
+      if (completedTaskIds.includes(taskId) || activeTaskIds.includes(taskId)) {
+        continue; // Already tracked (completed) or handled in first loop (active)
+      }
+
+      const task = this.state.tasks.get(taskId);
+      if (!task) continue;
+
+      if (task.status === TASK_STATUS.COMPLETED) {
+        newlyCompleted.push(taskId);
+      } else if (task.status === TASK_STATUS.FAILED) {
+        if (this.canRetryTask(task)) {
+          continue;
+        }
+        newlyFailed.push(taskId);
+      }
+    }
+
+    return { newlyCompleted, newlyFailed };
+  }
+
+  /**
+   * Find tasks that are ready to execute
+   * @param workflow - Workflow definition
+   * @param completedTaskIds - IDs of completed tasks
+   * @param activeTaskIds - IDs of currently active tasks
+   * @returns Object with ready tasks and blocked task IDs
+   */
+  private findReadyTasks(
+    workflow: Workflow,
+    completedTaskIds: string[],
+    activeTaskIds: string[]
+  ): { readyTasks: Task[]; blockedTaskIds: string[] } {
+    const readyTasks: Task[] = [];
+    const blockedTaskIds: string[] = [];
+
+    for (const taskId of workflow.taskIds) {
+      // Skip if already completed or active
+      if (completedTaskIds.includes(taskId) || activeTaskIds.includes(taskId)) {
+        continue;
+      }
+
+      const task = this.state.tasks.get(taskId);
+      if (!task) {
+        blockedTaskIds.push(taskId);
+        continue;
+      }
+
+      const canExecute = this.canExecuteTask(taskId);
+      if (canExecute.canExecute) {
+        readyTasks.push(task);
+        this.markTaskInProgress(taskId);
+      } else {
+        blockedTaskIds.push(taskId);
+      }
+    }
+
+    return { readyTasks, blockedTaskIds };
+  }
+
+  /**
+   * Determine if workflow should be marked as failed
+   * @param workflow - Workflow definition
+   * @param completedTaskIds - IDs of completed tasks
+   * @param continueOnFailure - Whether to continue on failures
+   * @returns True if workflow should be failed
+   */
+  private shouldFailWorkflow(
+    workflow: Workflow,
+    completedTaskIds: string[],
+    continueOnFailure: boolean
+  ): boolean {
+    if (continueOnFailure) {
+      return false;
+    }
+
+    // Get all failed tasks in this workflow
+    const failedTaskIds = workflow.taskIds.filter(taskId => {
+      const task = this.state.tasks.get(taskId);
+      return task && task.status === TASK_STATUS.FAILED;
+    });
+
+    if (failedTaskIds.length === 0) {
+      return false;
+    }
+
+    // Check if there is still at least one task that can be executed
+    const canStillExecute = workflow.taskIds.some(taskId => {
+      // Skip already completed tasks
+      if (completedTaskIds.includes(taskId)) return false;
+
+      const task = this.state.tasks.get(taskId);
+      if (!task) return false;
+
+      // Failed tasks cannot be executed
+      if (task.status === TASK_STATUS.FAILED) return false;
+
+      // Tasks that are in_progress are already executing, so they represent a valid path
+      if (task.status === TASK_STATUS.IN_PROGRESS) return true;
+
+      // Check if this task can now be executed
+      return this.canExecuteTask(taskId).canExecute;
+    });
+
+    // Fail the workflow only if NO tasks can be executed anymore
+    return !canStillExecute;
+  }
+
+  /**
    * Advance workflow run by finding newly unlocked tasks
    * @param runId - Workflow run ID
-   * @returns Object with updated run and newly ready tasks, or null if not found
+   * @returns Object with detailed workflow advancement information, or null if not found
    */
-  advanceWorkflowRun(runId: string): { run: WorkflowRun; newReadyTasks: Task[] } | null {
+  advanceWorkflowRun(runId: string): {
+    run: WorkflowRun;
+    completedTasks: Task[];
+    failedTasks: Task[];
+    newlyReadyTasks: Task[];
+    blockedTasks: Task[];
+    workflowStatus: WorkflowRunStatus;
+    message: string;
+  } | null {
     const run = this.state.workflowRuns.get(runId);
     if (!run) return null;
 
     const workflow = this.state.workflows.get(run.workflowId);
     if (!workflow) return null;
 
-    // Get current task states in the workflow
-    const currentCompleted = new Set(run.completedTaskIds);
-    const currentActive = new Set(run.activeTaskIds);
+    const continueOnFailure = run.continueOnFailure || false;
 
-    // Check for newly completed tasks (tasks that were active but are now completed)
-    const newlyCompleted: string[] = [];
-    for (const activeTaskId of currentActive) {
-      const task = this.state.tasks.get(activeTaskId);
-      if (task && task.status === TASK_STATUS.COMPLETED) {
-        newlyCompleted.push(activeTaskId);
-      } else if (task && task.status === TASK_STATUS.FAILED) {
-        // Task failed - check if it can be retried
-        if (task.maxRetries !== undefined && task.retries !== undefined && task.retries < task.maxRetries) {
-          // Can be retried, don't mark as failed for workflow
-          continue;
-        }
-        // Task failed and cannot be retried - mark workflow as failed
-        const updatedRun = {
-          ...run,
-          status: 'failed' as const,
-          error: `Task ${activeTaskId} failed: ${task.error}`,
-          completedAt: new Date().toISOString()
-        };
-        this.state.workflowRuns.set(runId, updatedRun);
-        return { run: updatedRun, newReadyTasks: [] };
-      } else if (task && task.status === TASK_STATUS.IN_PROGRESS && task.timeoutMs && task.startedAt) {
-        // Check if task has exceeded its timeout
-        const startedTime = new Date(task.startedAt).getTime();
-        const currentTime = Date.now();
-        const elapsed = currentTime - startedTime;
-        
-        if (elapsed > task.timeoutMs) {
-          // Task has timed out - fail it
-          this.failTask(activeTaskId, `Task timed out after ${elapsed}ms (timeout: ${task.timeoutMs}ms)`);
-          newlyCompleted.push(activeTaskId);
-        }
-      }
-    }
+    // Process active tasks to find newly completed/failed
+    const { newlyCompleted, newlyFailed } = this.processActiveTasks(
+      run.activeTaskIds,
+      run.completedTaskIds,
+      workflow.taskIds,
+      continueOnFailure
+    );
 
-    // Update completed tasks
+    // Update completed and active task lists
     const updatedCompleted = [...run.completedTaskIds, ...newlyCompleted];
-    const updatedActive = run.activeTaskIds.filter(id => !newlyCompleted.includes(id));
+    const updatedActive = run.activeTaskIds.filter(id => !newlyCompleted.includes(id) && !newlyFailed.includes(id));
 
-    // Find newly unlocked tasks
-    const newReadyTasks: Task[] = [];
-    const newBlockedTaskIds: string[] = [];
+    // Find newly ready tasks
+    const { readyTasks, blockedTaskIds } = this.findReadyTasks(workflow, updatedCompleted, updatedActive);
 
-    for (const taskId of workflow.taskIds) {
-      // Skip if already completed or active
-      if (updatedCompleted.includes(taskId) || updatedActive.includes(taskId)) {
-        continue;
-      }
+    // Update active tasks with newly ready tasks
+    const updatedActiveTaskIds = [...updatedActive, ...readyTasks.map(t => t.id)];
+    const updatedBlockedTaskIds = [...run.blockedTaskIds.filter(id => !readyTasks.map(t => t.id).includes(id)), ...blockedTaskIds];
 
-      const task = this.state.tasks.get(taskId);
-      if (!task) {
-        newBlockedTaskIds.push(taskId);
-        continue;
-      }
+    // Determine workflow status
+    let workflowStatus: WorkflowRunStatus = 'in_progress';
+    let errorMessage: string | undefined;
 
-      const canExecute = this.canExecuteTask(taskId);
-      if (canExecute.canExecute) {
-        newReadyTasks.push(task);
-        // Mark as in progress
-        this.markTaskInProgress(taskId);
-      } else {
-        newBlockedTaskIds.push(taskId);
-      }
+    // Check if workflow should be failed
+    if (this.shouldFailWorkflow(workflow, updatedCompleted, continueOnFailure)) {
+      workflowStatus = 'failed';
+      errorMessage = `Workflow failed due to task failures`;
+    } else if (workflow.taskIds.every((taskId: string) => updatedCompleted.includes(taskId))) {
+      workflowStatus = 'completed';
+    } else if (newlyFailed.length > 0 && continueOnFailure) {
+      // Continue despite failures
+      workflowStatus = 'in_progress';
     }
 
-    // Update workflow run state
-    const updatedActiveTaskIds = [...updatedActive, ...newReadyTasks.map(t => t.id)];
-    const updatedBlockedTaskIds = [...run.blockedTaskIds.filter(id => !newReadyTasks.map(t => t.id).includes(id)), ...newBlockedTaskIds];
-
-    // Check if workflow is complete
-    const allTasksCompleted = workflow.taskIds.every((taskId: string) => updatedCompleted.includes(taskId));
-    const workflowStatus = allTasksCompleted ? 'completed' as const : 'in_progress' as const;
-
-    const updatedRun = {
+    // Build updated run
+    const updatedRun: WorkflowRun = {
       ...run,
       status: workflowStatus,
       completedTaskIds: updatedCompleted,
       activeTaskIds: updatedActiveTaskIds,
       blockedTaskIds: updatedBlockedTaskIds,
-      completedAt: allTasksCompleted ? new Date().toISOString() : undefined
+      error: errorMessage,
+      completedAt: workflowStatus === 'completed' || workflowStatus === 'failed' ? new Date().toISOString() : undefined
     };
 
     this.state.workflowRuns.set(runId, updatedRun);
-    return { run: updatedRun, newReadyTasks };
+
+    // Get task objects for return value
+    const completedTasks = updatedCompleted.map(id => this.state.tasks.get(id)).filter((t): t is Task => t !== undefined);
+    const failedTasks = newlyFailed.map(id => this.state.tasks.get(id)).filter((t): t is Task => t !== undefined);
+    // Return only tasks that are currently blocked (not completed, not active, not ready, not failed)
+    const blockedTasks = workflow.taskIds
+      .filter(id => 
+        !updatedCompleted.includes(id) && 
+        !updatedActiveTaskIds.includes(id) &&
+        !newlyFailed.includes(id)
+      )
+      .map(id => this.state.tasks.get(id))
+      .filter((t): t is Task => t !== undefined);
+
+    // Build human-readable message
+    const messageParts: string[] = [];
+    if (workflowStatus === 'completed') {
+      messageParts.push('Workflow completed successfully');
+    } else if (workflowStatus === 'failed') {
+      messageParts.push(`Workflow failed: ${errorMessage}`);
+    } else {
+      messageParts.push('Workflow in progress');
+    }
+    messageParts.push(`${completedTasks.length} tasks completed`);
+    if (failedTasks.length > 0) {
+      messageParts.push(`${failedTasks.length} tasks failed`);
+    }
+    messageParts.push(`${readyTasks.length} new tasks ready`);
+    messageParts.push(`${blockedTasks.length} tasks blocked`);
+
+    return {
+      run: updatedRun,
+      completedTasks,
+      failedTasks,
+      newlyReadyTasks: readyTasks,
+      blockedTasks,
+      workflowStatus,
+      message: messageParts.join('. ')
+    };
   }
 
   /**

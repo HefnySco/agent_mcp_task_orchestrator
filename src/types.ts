@@ -77,6 +77,7 @@ export interface WorkflowRun {
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  continueOnFailure?: boolean; // If true, workflow continues even if some tasks fail
 }
 
 /**

@@ -826,11 +826,46 @@ export async function handleAdvanceWorkflowRun(
 
   await service.forceSave();
 
+  // Build detailed output
+  let output = `➡️ Workflow run advanced\n\n**Run ID:** ${result.run.id}\n**Status:** ${result.workflowStatus}\n\n`;
+  output += `**Summary:** ${result.message}\n\n`;
+  
+  if (result.completedTasks.length > 0) {
+    output += `**Completed Tasks (${result.completedTasks.length}):**\n`;
+    result.completedTasks.forEach(t => {
+      output += `  - ${t.name} (ID: ${t.id})\n`;
+    });
+    output += '\n';
+  }
+  
+  if (result.failedTasks.length > 0) {
+    output += `**Failed Tasks (${result.failedTasks.length}):**\n`;
+    result.failedTasks.forEach(t => {
+      output += `  - ${t.name} (ID: ${t.id}) - Error: ${t.error}\n`;
+    });
+    output += '\n';
+  }
+  
+  if (result.newlyReadyTasks.length > 0) {
+    output += `**New Ready Tasks (${result.newlyReadyTasks.length}):**\n`;
+    result.newlyReadyTasks.forEach(t => {
+      output += `  - ${t.name} (ID: ${t.id})\n`;
+    });
+    output += '\n';
+  }
+  
+  if (result.blockedTasks.length > 0) {
+    output += `**Blocked Tasks (${result.blockedTasks.length}):**\n`;
+    result.blockedTasks.forEach(t => {
+      output += `  - ${t.name} (ID: ${t.id}) - Status: ${t.status}\n`;
+    });
+  }
+
   const response = {
     content: [
       {
         type: 'text',
-        text: `➡️ Workflow run advanced\n\n**Run ID:** ${result.run.id}\n**Status:** ${result.run.status}\n**Completed Tasks:** ${result.run.completedTaskIds.length}\n**Active Tasks:** ${result.run.activeTaskIds.length}\n**Blocked Tasks:** ${result.run.blockedTaskIds.length}\n**New Ready Tasks:** ${result.newReadyTasks.length}\n**New Ready Task Names:** ${result.newReadyTasks.map(t => t.name).join(', ')}`
+        text: output
       }
     ]
   };

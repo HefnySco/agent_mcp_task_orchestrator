@@ -423,6 +423,142 @@ describe('SequentialService', () => {
     });
   });
 
+  describe('advanceWorkflowRun', () => {
+    it('should return detailed information about workflow advancement', () => {
+      const task1 = service.createTask({ name: 'Task 1' });
+      const task2 = service.createTask({ name: 'Task 2', dependencies: [task1.id] });
+      const workflow = service.createWorkflow('Test Workflow', [task1.id, task2.id]);
+
+      const startResult = service.startWorkflowExecution(workflow.id);
+      assert.ok(startResult);
+      assert.strictEqual(startResult.readyTasks.length, 1);
+
+      // Complete task 1 by updating its status directly (simulating external completion)
+      service.updateTask(task1.id, { status: 'completed', completedAt: new Date().toISOString() });
+
+      // Advance workflow
+      const advanceResult = service.advanceWorkflowRun(startResult.runId);
+      assert.ok(advanceResult);
+      // completedTasks returns all completed tasks in workflow (including task1)
+      assert.strictEqual(advanceResult.completedTasks.length, 1);
+      assert.strictEqual(advanceResult.failedTasks.length, 0);
+      assert.strictEqual(advanceResult.newlyReadyTasks.length, 1);
+      assert.strictEqual(advanceResult.workflowStatus, 'in_progress');
+      assert.ok(advanceResult.message);
+    });
+
+    it('should detect manually completed tasks', () => {
+      const task1 = service.createTask({ name: 'Task 1' });
+      const task2 = service.createTask({ name: 'Task 2', dependencies: [task1.id] });
+      const workflow = service.createWorkflow('Test Workflow', [task1.id, task2.id]);
+
+      const startResult = service.startWorkflowExecution(workflow.id);
+      assert.ok(startResult);
+      
+      // Manually complete task 1 outside of workflow by updating status directly
+      service.updateTask(task1.id, { status: 'completed', completedAt: new Date().toISOString() });
+
+      // Advance should detect the manual completion
+      const advanceResult = service.advanceWorkflowRun(startResult.runId);
+      assert.ok(advanceResult);
+      // completedTasks returns all completed tasks in workflow
+      assert.strictEqual(advanceResult.completedTasks.length, 1);
+      assert.strictEqual(advanceResult.newlyReadyTasks.length, 1);
+    });
+
+    it('should detect manually failed tasks', () => {
+      const task1 = service.createTask({ name: 'Task 1' });
+      const task2 = service.createTask({ name: 'Task 2', dependencies: [task1.id] });
+      const workflow = service.createWorkflow('Test Workflow', [task1.id, task2.id]);
+
+      const startResult = service.startWorkflowExecution(workflow.id);
+      assert.ok(startResult);
+      
+      // Manually fail task 1 outside of workflow
+      service.failTask(task1.id, 'Manual failure');
+
+      // Advance should detect the failure
+      const advanceResult = service.advanceWorkflowRun(startResult.runId);
+      assert.ok(advanceResult);
+      assert.strictEqual(advanceResult.failedTasks.length, 1);
+      assert.strictEqual(advanceResult.workflowStatus, 'failed');
+    });
+
+    it('should only fail workflow when no paths forward remain', () => {
+      const task1 = service.createTask({ name: 'Task 1' });
+      const task2 = service.createTask({ name: 'Task 2', dependencies: [task1.id] });
+      const task3 = service.createTask({ name: 'Task 3' }); // Independent task
+      const workflow = service.createWorkflow('Test Workflow', [task1.id, task2.id, task3.id]);
+
+      const startResult = service.startWorkflowExecution(workflow.id);
+      assert.ok(startResult);
+      
+      // Fail task 1 by updating status directly (simulating external failure)
+      service.updateTask(task1.id, { status: 'failed', error: 'Task 1 failed', completedAt: new Date().toISOString() });
+
+      const advanceResult = service.advanceWorkflowRun(startResult.runId);
+      assert.ok(advanceResult);
+      // Workflow should not fail because task 3 can still run
+      // Note: Since task 1 was active and failed, and task 3 is independent, 
+      // the workflow should continue with task 3
+      assert.strictEqual(advanceResult.workflowStatus, 'in_progress');
+      assert.strictEqual(advanceResult.failedTasks.length, 1);
+      // task3 was already started as in_progress during workflow start (no deps),
+      // so it is not "newly" ready — it was ready from the beginning
+      assert.strictEqual(advanceResult.newlyReadyTasks.length, 0);
+      // Verify task3 is still active in the workflow run
+      assert.ok(advanceResult.run.activeTaskIds.includes(task3.id));
+    });
+
+    it('should fail workflow when all paths are blocked', () => {
+      const task1 = service.createTask({ name: 'Task 1' });
+      const task2 = service.createTask({ name: 'Task 2', dependencies: [task1.id] });
+      const workflow = service.createWorkflow('Test Workflow', [task1.id, task2.id]);
+
+      const startResult = service.startWorkflowExecution(workflow.id);
+      assert.ok(startResult);
+      
+      // Fail task 1, blocking task 2
+      service.failTask(task1.id, 'Task 1 failed');
+
+      const advanceResult = service.advanceWorkflowRun(startResult.runId);
+      assert.ok(advanceResult);
+      assert.strictEqual(advanceResult.workflowStatus, 'failed');
+      assert.strictEqual(advanceResult.failedTasks.length, 1);
+      assert.strictEqual(advanceResult.blockedTasks.length, 1);
+    });
+
+    it('should include blocked tasks in return value', () => {
+      const task1 = service.createTask({ name: 'Task 1' });
+      const task2 = service.createTask({ name: 'Task 2', dependencies: [task1.id] });
+      const workflow = service.createWorkflow('Test Workflow', [task1.id, task2.id]);
+
+      const startResult = service.startWorkflowExecution(workflow.id);
+      assert.ok(startResult);
+      
+      const advanceResult = service.advanceWorkflowRun(startResult.runId);
+      assert.ok(advanceResult);
+      assert.strictEqual(advanceResult.blockedTasks.length, 1);
+      assert.strictEqual(advanceResult.blockedTasks[0].id, task2.id);
+    });
+
+    it('should return human-readable message', () => {
+      const task1 = service.createTask({ name: 'Task 1' });
+      const task2 = service.createTask({ name: 'Task 2', dependencies: [task1.id] });
+      const workflow = service.createWorkflow('Test Workflow', [task1.id, task2.id]);
+
+      const startResult = service.startWorkflowExecution(workflow.id);
+      assert.ok(startResult);
+      service.executeTask(task1.id);
+
+      const advanceResult = service.advanceWorkflowRun(startResult.runId);
+      assert.ok(advanceResult);
+      assert.ok(advanceResult.message);
+      assert.ok(advanceResult.message.includes('tasks completed'));
+      assert.ok(advanceResult.message.includes('new tasks ready'));
+    });
+  });
+
   describe('getStats', () => {
     it('should return correct statistics', () => {
       const task1 = service.createTask({ name: 'Task 1' });

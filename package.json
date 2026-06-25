@@ -4,12 +4,26 @@
   "description": "MCP server for task orchestration - manage and execute tasks with dependencies and workflows",
   "main": "dist/index.js",
   "type": "module",
+  "bin": {
+    "task-orchestrator-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "STORAGE.md",
+    "mcp.json"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "test": "tsc --project tsconfig.test.json && node --test dist/test/taskOrchestratorService.test.js"
+    "test": "tsc --project tsconfig.test.json && node --test dist/test/taskOrchestratorService.test.js",
+    "prepublishOnly": "npm run build"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "mcpName": "io.github.HefnySco/agent_mcp_task_orchestrator",
   "keywords": [
     "mcp",
     "task-orchestrator",

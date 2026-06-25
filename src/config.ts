@@ -1,11 +1,15 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
+import os from 'os';
 import { ConfigurationError } from './errors.js';
 import { FILE_CONFIG } from './constants.js';
 import type { SequentialConfig } from './types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+
+// Safe default storage directory in user's home directory
+const DEFAULT_STORAGE_DIR = path.join(os.homedir(), '.task-orchestrator');
 
 /**
  * Configuration manager for Task Orchestrator MCP server
@@ -22,18 +26,18 @@ export class ConfigManager {
    */
   private loadConfig(): SequentialConfig {
     const storageBackend = (process.env.TASK_ORCHESTRATOR_STORAGE_BACKEND || 'json') as 'json' | 'sqlite';
-    
-    const storageDir = process.env.TASK_ORCHESTRATOR_STORAGE_PATH || PROJECT_ROOT;
-    
+
+    // Use safe default storage directory in user's home directory
     const storagePath = path.join(
-      storageDir,
-      storageBackend === 'sqlite' 
+      DEFAULT_STORAGE_DIR,
+      'storage',
+      storageBackend === 'sqlite'
         ? 'task-orchestrator-storage.db'
         : FILE_CONFIG.DEFAULT_STORAGE_FILENAME
     );
-    
-    const outputDir = process.env.TASK_ORCHESTRATOR_OUTPUT_DIR || 
-      path.join(PROJECT_ROOT, FILE_CONFIG.DEFAULT_OUTPUT_DIR);
+
+    const outputDir = process.env.TASK_ORCHESTRATOR_OUTPUT_DIR ||
+      path.join(DEFAULT_STORAGE_DIR, FILE_CONFIG.DEFAULT_OUTPUT_DIR);
     
     const autoSave = process.env.TASK_ORCHESTRATOR_AUTO_SAVE !== 'false';
     

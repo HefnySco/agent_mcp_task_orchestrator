@@ -21,12 +21,16 @@ export class Logger {
   private outputDir: string;
   private logLevel: LogLevel;
   private writeQueue: Promise<void> = Promise.resolve();
+  private fileLoggingEnabled: boolean;
 
   constructor() {
     const config = getConfigManager();
     this.outputDir = config.getOutputDir();
     this.logLevel = (process.env.LOG_LEVEL as LogLevel) || LogLevel.INFO;
-    this.ensureOutputDir();
+    this.fileLoggingEnabled = process.env.TASK_ORCHESTRATOR_LOG === 'true';
+    if (this.fileLoggingEnabled) {
+      this.ensureOutputDir();
+    }
   }
 
   /**
@@ -53,6 +57,10 @@ export class Logger {
    * Write log to file
    */
   private async writeToFile(entry: LogEntry): Promise<void> {
+    if (!this.fileLoggingEnabled) {
+      return;
+    }
+
     this.writeQueue = this.writeQueue.then(async () => {
       try {
         const timestamp = new Date().toISOString();

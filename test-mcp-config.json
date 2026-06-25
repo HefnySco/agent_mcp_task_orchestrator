@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "task-orchestrator": {
+      "command": "node",
+      "args": ["/home/mhefny/code/mcp/agent_mcp_task_orchestrator/dist/index.js"]
+    }
+  }
+}

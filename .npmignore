@@ -1,0 +1,44 @@
+# Source files
+src/
+test/
+
+# Build artifacts
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+
+# Development files
+.git/
+.gitignore
+tsconfig.json
+tsconfig.test.json
+
+# Output and logs
+output/
+output.test
+*.log
+
+# Storage files (user-specific)
+*.json
+!mcp.json
+!package.json
+!package-lock.json
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc
+.env
+.env.local
+*.md
+!README.md
+!STORAGE.md

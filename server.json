@@ -1,0 +1,32 @@
+{
+  "$schema": "https://registry.modelcontextprotocol.io/schemas/server.json",
+  "name": "io.github.HefnySco/agent_mcp_task_orchestrator",
+  "version": "2.2.0",
+  "description": "Task Orchestrator MCP - A powerful task orchestration server designed specifically to enhance LLM agents. Provides structured task management, dependency tracking, and workflow execution.",
+  "author": "Mohammad Hefny (HefnySco)",
+  "license": "MIT",
+  "homepage": "https://github.com/HefnySco/agent_mcp_task_orchestrator",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HefnySco/agent_mcp_task_orchestrator.git"
+  },
+  "runtime": {
+    "type": "node",
+    "command": "npx",
+    "args": [
+      "-y",
+      "agent_mcp_task_orchestrator"
+    ]
+  },
+  "categories": [
+    "productivity",
+    "automation"
+  ],
+  "keywords": [
+    "task-orchestrator",
+    "workflow",
+    "dependencies",
+    "llm",
+    "agent"
+  ]
+}

@@ -81,7 +81,97 @@ It effectively turns a single LLM call into a **persistent, stateful agent** cap
 // 4. Complete subtasks → parent can be completed
 ```
 
-## 🛠️ Available Tools
+## � Installation & Deployment
+
+### Option 1: Install from npm (Recommended)
+
+```bash
+npm install -g agent_mcp_task_orchestrator
+```
+
+Then configure in your MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "task-orchestrator": {
+      "command": "agent_mcp_task_orchestrator"
+    }
+  }
+}
+```
+
+**Note:** Storage automatically uses `~/.task-orchestrator/storage/` directory. No configuration needed.
+
+### Option 2: Install from GitHub
+
+```bash
+git clone https://github.com/HefnySco/agent_mcp_task_orchestrator.git
+cd agent_mcp_task_orchestrator
+npm install
+npm run build
+```
+
+Then configure with the local path:
+
+```json
+{
+  "mcpServers": {
+    "task-orchestrator": {
+      "command": "node",
+      "args": ["/path/to/agent_mcp_task_orchestrator/dist/index.js"]
+    }
+  }
+}
+```
+
+**Note:** Storage automatically uses `~/.task-orchestrator/storage/` directory. No configuration needed.
+
+### Environment Variables (Optional)
+
+- `TASK_ORCHESTRATOR_STORAGE_BACKEND`: Storage backend type (`json` or `sqlite`, default: `json`)
+- `TASK_ORCHESTRATOR_LOG`: Enable file logging for tool requests and LLM responses (`true` to enable, default: disabled)
+- `TASK_ORCHESTRATOR_OUTPUT_DIR`: Custom directory for activity logs (default: `~/.task-orchestrator/output`, only used when `TASK_ORCHESTRATOR_LOG=true`)
+
+### Publishing to npm
+
+For maintainers:
+
+```bash
+# Build and publish
+npm run build
+npm publish
+```
+
+The `prepublishOnly` script automatically builds before publishing.
+
+## 🌊 Windsurf Integration
+
+To use Task Orchestrator MCP with Windsurf (Cascade):
+
+1. **Install globally:**
+```bash
+npm install -g agent_mcp_task_orchestrator
+```
+
+2. **Add to Windsurf MCP config:**
+Edit `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "task-orchestrator": {
+      "command": "agent_mcp_task_orchestrator"
+    }
+  }
+}
+```
+
+3. **Restart Windsurf** to pick up the new MCP server configuration.
+
+**Note:** Storage automatically uses `~/.task-orchestrator/storage/` directory. No additional configuration needed.
+
+## ��️ Available Tools
 
 ### Task Management
 
@@ -294,7 +384,7 @@ Get the version information of this task orchestrator MCP server.
 
 ### Dependency-Aware Workflow Orchestration
 
-The task-orchestrator-mcp supports true dependency-aware workflow execution that respects the full task dependency graph (not just linear execution). This enables parallel execution of independent tasks within a workflow.
+The agent_mcp_task_orchestrator supports true dependency-aware workflow execution that respects the full task dependency graph (not just linear execution). This enables parallel execution of independent tasks within a workflow.
 
 #### Key Benefits
 
@@ -308,13 +398,35 @@ The task-orchestrator-mcp supports true dependency-aware workflow execution that
 
 ## 📝 Logging
 
-All tool calls are automatically logged to the output directory specified by `SEQUENTIAL_OUTPUT_DIR`. Logs are organized by date:
+File logging is **disabled by default**. To enable logging of tool calls and LLM responses, set the `TASK_ORCHESTRATOR_LOG=true` environment variable.
+
+When enabled, logs are written to the output directory (default: `~/.task-orchestrator/output/`) and organized by date:
 
 ```
 output/
 ├── task-orchestrator-log-2024-06-22.json
 ├── task-orchestrator-log-2024-06-23.json
 └── ...
+```
+
+**Enable logging:**
+```bash
+TASK_ORCHESTRATOR_LOG=true node dist/index.js
+```
+
+Or in your MCP client config:
+```json
+{
+  "mcpServers": {
+    "task-orchestrator": {
+      "command": "node",
+      "args": ["/path/to/dist/index.js"],
+      "env": {
+        "TASK_ORCHESTRATOR_LOG": "true"
+      }
+    }
+  }
+}
 ```
 
 ### Log Entry Types

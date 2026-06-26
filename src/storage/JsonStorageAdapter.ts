@@ -38,12 +38,18 @@ export class JsonStorageAdapter implements IStorageAdapter {
       const data = await fs.readFile(this.storagePath, 'utf-8');
       const parsed = JSON.parse(data);
       
+      const validStatuses = ['pending', 'in_progress', 'completed', 'failed'] as const;
       const tasks = new Map<string, Task>(
-        Object.entries(parsed.tasks || {}).map(([id, task]: [string, unknown]) => [id, task as Task])
+        Object.entries(parsed.tasks || {}).map(([id, task]: [string, unknown]) => {
+          const taskObj = task as Task;
+          const validatedStatus = validStatuses.includes(taskObj.status as any) ? taskObj.status : 'pending';
+          return [id, { ...taskObj, status: validatedStatus as Task['status'] }];
+        })
       );
       
       const workflows = new Map<string, Workflow>(
         Object.entries(parsed.workflows || {}).map(([id, workflow]: [string, unknown]) => {
+          // TODO: Remove this legacy migration code once all deployments have run at least once with the new schema
           // Handle both old format (string[]) and new format (Workflow)
           if (Array.isArray(workflow)) {
             // Old format - migrate to new format
@@ -65,12 +71,16 @@ export class JsonStorageAdapter implements IStorageAdapter {
 
       return { tasks, workflows, workflowRuns };
     } catch (err) {
-      // File doesn't exist or is empty, start with empty state
-      return {
-        tasks: new Map(),
-        workflows: new Map(),
-        workflowRuns: new Map()
-      };
+      // Only return empty state if file doesn't exist
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return {
+          tasks: new Map(),
+          workflows: new Map(),
+          workflowRuns: new Map()
+        };
+      }
+      // For any other error (including JSON corruption), fail fast
+      throw new StorageError('Failed to load state from JSON file', err instanceof Error ? err : undefined);
     }
   }
 

@@ -51,17 +51,26 @@ class TaskOrchestratorMCPServer {
   }
 
   private async initializeAsync(): Promise<void> {
+    const config = getConfigManager();
+    this.logger.info('Initializing storage', { 
+      backend: config.getStorageBackend(),
+      path: config.getStoragePath()
+    });
+    
     try {
-      const config = getConfigManager();
-      this.logger.info('Initializing storage', { 
-        backend: config.getStorageBackend(),
-        path: config.getStoragePath()
-      });
       await this.storageAdapter.initialize();
+    } catch (err) {
+      this.logger.error('Failed to initialize storage adapter', { error: err });
+      console.error('❌ Storage adapter initialization failed:', err);
+      throw new Error(`Storage adapter initialization failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    
+    try {
       await this.taskOrchestratorService.load();
     } catch (err) {
-      this.logger.error('Failed to initialize task orchestrator', { error: err });
-      console.error('❌ Storage init failed:', err);  // Force visible
+      this.logger.error('Failed to load state from storage', { error: err });
+      console.error('❌ State load failed:', err);
+      throw new Error(`Failed to load state from storage: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

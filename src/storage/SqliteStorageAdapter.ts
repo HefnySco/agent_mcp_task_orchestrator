@@ -8,6 +8,7 @@ import type {
 } from '../types.js';
 import type { IStorageAdapter } from './IStorageAdapter.js';
 import { StorageError } from '../errors.js';
+import { getLogger } from '../logger.js';
 
 /**
  * SQLite-based storage adapter using sql.js (pure JavaScript)
@@ -17,9 +18,11 @@ export class SqliteStorageAdapter implements IStorageAdapter {
   private db: Database | null = null;
   private storagePath: string;
   private sqlJs: any;
+  private logger: ReturnType<typeof getLogger>;
 
   constructor(storagePath: string) {
     this.storagePath = storagePath;
+    this.logger = getLogger();
   }
 
   /**
@@ -97,6 +100,26 @@ export class SqliteStorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * Safely parse JSON with fallback value
+   * @param jsonStr - JSON string to parse
+   * @param fallback - Fallback value if parsing fails
+   * @param context - Optional context for logging (table, id, field)
+   * @returns Parsed value or fallback
+   */
+  private safeJsonParse<T>(jsonStr: string | null | undefined, fallback: T, context?: { table: string; id: string; field: string }): T {
+    if (!jsonStr) return fallback;
+    try {
+      return JSON.parse(jsonStr) as T;
+    } catch (err) {
+      this.logger.warn(`Failed to parse JSON field, using fallback`, {
+        error: err instanceof Error ? err.message : String(err),
+        ...context
+      });
+      return fallback;
+    }
+  }
+
+  /**
    * Load state from SQLite database
    * @returns The loaded state
    */
@@ -111,16 +134,19 @@ export class SqliteStorageAdapter implements IStorageAdapter {
       const taskRows = this.db!.exec('SELECT * FROM tasks')[0]?.values || [];
       
       for (const row of taskRows) {
+        const taskId = row[0] as string;
+        const validStatuses = ['pending', 'in_progress', 'completed', 'failed'] as const;
+        const rawStatus = row[3] as string;
         const task: Task = {
-          id: row[0] as string,
+          id: taskId,
           name: row[1] as string,
           description: row[2] as string || undefined,
-          status: row[3] as Task['status'],
-          dependencies: row[4] ? JSON.parse(row[4] as string) : [],
-          softDependencies: row[5] ? JSON.parse(row[5] as string) : undefined,
-          dependencyTimeouts: row[6] ? JSON.parse(row[6] as string) : undefined,
-          externalDependencies: row[7] ? JSON.parse(row[7] as string) : undefined,
-          conditionalDependencies: row[8] ? JSON.parse(row[8] as string) : undefined,
+          status: (validStatuses.includes(rawStatus as any) ? rawStatus : 'pending') as Task['status'],
+          dependencies: this.safeJsonParse(row[4] as string, [], { table: 'tasks', id: taskId, field: 'dependencies' }),
+          softDependencies: this.safeJsonParse(row[5] as string, undefined, { table: 'tasks', id: taskId, field: 'softDependencies' }),
+          dependencyTimeouts: this.safeJsonParse(row[6] as string, undefined, { table: 'tasks', id: taskId, field: 'dependencyTimeouts' }),
+          externalDependencies: this.safeJsonParse(row[7] as string, undefined, { table: 'tasks', id: taskId, field: 'externalDependencies' }),
+          conditionalDependencies: this.safeJsonParse(row[8] as string, undefined, { table: 'tasks', id: taskId, field: 'conditionalDependencies' }),
           parentTaskId: row[9] as string || undefined,
           sessionId: row[10] as string || undefined,
           createdAt: row[11] as string,
@@ -130,9 +156,9 @@ export class SqliteStorageAdapter implements IStorageAdapter {
           retries: row[15] as number || 0,
           maxRetries: row[16] as number || undefined,
           timeoutMs: row[17] as number || undefined,
-          result: row[18] ? JSON.parse(row[18] as string) : undefined,
+          result: this.safeJsonParse(row[18] as string, undefined, { table: 'tasks', id: taskId, field: 'result' }),
           error: row[19] as string || undefined,
-          metadata: row[20] ? JSON.parse(row[20] as string) : undefined
+          metadata: this.safeJsonParse(row[20] as string, undefined, { table: 'tasks', id: taskId, field: 'metadata' })
         };
         tasks.set(task.id, task);
       }
@@ -142,10 +168,11 @@ export class SqliteStorageAdapter implements IStorageAdapter {
       const workflowRows = this.db!.exec('SELECT * FROM workflows')[0]?.values || [];
       
       for (const row of workflowRows) {
+        const workflowId = row[0] as string;
         const workflow: Workflow = {
-          id: row[0] as string,
+          id: workflowId,
           name: row[1] as string,
-          taskIds: JSON.parse(row[2] as string),
+          taskIds: this.safeJsonParse(row[2] as string, [], { table: 'workflows', id: workflowId, field: 'taskIds' }),
           createdAt: row[3] as string,
           updatedAt: row[4] as string
         };
@@ -157,13 +184,14 @@ export class SqliteStorageAdapter implements IStorageAdapter {
       const runRows = this.db!.exec('SELECT * FROM workflow_runs')[0]?.values || [];
       
       for (const row of runRows) {
+        const runId = row[0] as string;
         const run: WorkflowRun = {
-          id: row[0] as string,
+          id: runId,
           workflowId: row[1] as string,
           status: row[2] as WorkflowRun['status'],
-          completedTaskIds: row[3] ? JSON.parse(row[3] as string) : [],
-          activeTaskIds: row[4] ? JSON.parse(row[4] as string) : [],
-          blockedTaskIds: row[5] ? JSON.parse(row[5] as string) : [],
+          completedTaskIds: this.safeJsonParse(row[3] as string, [], { table: 'workflow_runs', id: runId, field: 'completedTaskIds' }),
+          activeTaskIds: this.safeJsonParse(row[4] as string, [], { table: 'workflow_runs', id: runId, field: 'activeTaskIds' }),
+          blockedTaskIds: this.safeJsonParse(row[5] as string, [], { table: 'workflow_runs', id: runId, field: 'blockedTaskIds' }),
           startedAt: row[6] as string || undefined,
           completedAt: row[7] as string || undefined,
           error: row[8] as string || undefined,

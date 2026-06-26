@@ -119,7 +119,8 @@ export const TaskStatusFilterSchema = z.enum(['pending', 'in_progress', 'complet
  */
 export const ExecuteTaskSchema = z.object({
   id: z.string().min(1, 'Task ID is required'),
-  result: z.unknown().optional()
+  result: z.unknown().optional(),
+  autoAdvance: z.boolean().optional().default(true)
 });
 
 /**
@@ -127,7 +128,8 @@ export const ExecuteTaskSchema = z.object({
  */
 export const FailTaskSchema = z.object({
   id: z.string().min(1, 'Task ID is required'),
-  error: z.string().min(1, 'Error message is required')
+  error: z.string().min(1, 'Error message is required'),
+  autoAdvance: z.boolean().optional().default(true)
 });
 
 /**

@@ -186,15 +186,16 @@ for (const testCase of testCases) {
         });
       });
 
-      it('should throw error for name-based dependencies', () => {
+      it('should resolve name-based dependencies within the same batch (forward reference)', () => {
         const tasks = [
           { name: 'Task A', dependencies: ['Task B'] },
           { name: 'Task B' }
         ];
 
-        assert.throws(() => {
-          service.createTasks(tasks);
-        }, /not a valid positional reference/);
+        const created = service.createTasks(tasks);
+        assert.strictEqual(created.length, 2);
+        assert.strictEqual(created[0].dependencies.length, 1);
+        assert.strictEqual(created[0].dependencies[0], created[1].id);
       });
 
       it('should support UUID-based dependencies referencing existing tasks', () => {
@@ -210,14 +211,49 @@ for (const testCase of testCases) {
         assert.strictEqual(created[0].dependencies[0], existingTask.id);
       });
 
-      it('should throw error for dependencies that are neither positional nor existing IDs', () => {
+      it('should throw error for dependencies that cannot be resolved by any method', () => {
         const tasks = [
           { name: 'Task A', dependencies: ['not-a-task-id'] }
         ];
 
         assert.throws(() => {
           service.createTasks(tasks);
-        }, /not a valid positional reference or existing task ID/);
+        }, /could not be resolved/);
+      });
+
+      it('should resolve dependencies by task name within the same batch', () => {
+        const tasks = [
+          { name: 'Study codebase', description: 'Analyze the project structure' },
+          { name: 'Explore improvements', description: 'Find improvement opportunities', dependencies: ['Study codebase'] },
+          { name: 'Compile recommendations', description: 'Organize findings', dependencies: ['Explore improvements'] }
+        ];
+
+        const created = service.createTasks(tasks);
+        assert.strictEqual(created.length, 3);
+        assert.strictEqual(created[1].dependencies.length, 1);
+        assert.strictEqual(created[1].dependencies[0], created[0].id);
+        assert.strictEqual(created[2].dependencies.length, 1);
+        assert.strictEqual(created[2].dependencies[0], created[1].id);
+      });
+
+      it('should resolve dependencies by task name case-insensitively within batch', () => {
+        const tasks = [
+          { name: 'Setup Environment' },
+          { name: 'Run Tests', dependencies: ['setup environment'] }
+        ];
+
+        const created = service.createTasks(tasks);
+        assert.strictEqual(created[1].dependencies[0], created[0].id);
+      });
+
+      it('should resolve dependencies by task name of existing tasks in the system', () => {
+        const existing = service.createTask({ name: 'Pre-existing Task' });
+        const tasks = [
+          { name: 'New Task', dependencies: ['Pre-existing Task'] }
+        ];
+
+        const created = service.createTasks(tasks);
+        assert.strictEqual(created[0].dependencies[0], existing.id);
       });
 
       it('should resolve positional dependencies (task-1, task-2, etc.)', () => {

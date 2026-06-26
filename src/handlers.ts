@@ -378,11 +378,50 @@ export async function handleExecuteTask(
 
   await service.forceSave();
 
+  // Check if task is in an active workflow and auto-advance is enabled
+  let workflowInfo = '';
+  if (validated.autoAdvance !== false) {
+    const runId = service.findActiveWorkflowRunForTask(validated.id);
+    if (runId) {
+      const advanceResult = service.advanceWorkflowRun(runId);
+      if (advanceResult) {
+        // Build workflow advancement info
+        workflowInfo = '\n\n🔄 **Workflow Auto-Advanced**\n\n';
+        workflowInfo += `**Run ID:** ${runId}\n`;
+        workflowInfo += `**Workflow Status:** ${advanceResult.workflowStatus}\n`;
+        workflowInfo += `**Summary:** ${advanceResult.message}\n\n`;
+        
+        if (advanceResult.newlyReadyTasks.length > 0) {
+          workflowInfo += `**New Ready Tasks (${advanceResult.newlyReadyTasks.length}):**\n`;
+          advanceResult.newlyReadyTasks.forEach(t => {
+            workflowInfo += `  - ${t.name} (ID: ${t.id})\n`;
+          });
+        }
+        
+        if (advanceResult.failedTasks.length > 0) {
+          workflowInfo += `\n**Failed Tasks (${advanceResult.failedTasks.length}):**\n`;
+          advanceResult.failedTasks.forEach(t => {
+            workflowInfo += `  - ${t.name} (ID: ${t.id}) - Error: ${t.error}\n`;
+          });
+        }
+        
+        if (advanceResult.workflowStatus === 'completed') {
+          workflowInfo += `\n✅ Workflow completed successfully!`;
+        } else if (advanceResult.workflowStatus === 'failed') {
+          workflowInfo += `\n❌ Workflow failed.`;
+        }
+        
+        await service.forceSave();
+      }
+    }
+  }
+
   // Format result safely to avoid JSON parsing issues
   let resultText = `✅ Task executed successfully\n\n**Name:** ${executedTask.name}\n**ID:** ${executedTask.id}\n**Status:** ${executedTask.status}`;
   if (executedTask.completedAt) {
     resultText += `\n**Completed:** ${executedTask.completedAt}`;
   }
+  resultText += workflowInfo;
 
   const result = {
     content: [
@@ -417,11 +456,52 @@ export async function handleFailTask(
 
   await service.forceSave();
 
+  // Check if task is in an active workflow and auto-advance is enabled
+  let workflowInfo = '';
+  if (validated.autoAdvance !== false) {
+    const runId = service.findActiveWorkflowRunForTask(validated.id);
+    if (runId) {
+      const advanceResult = service.advanceWorkflowRun(runId);
+      if (advanceResult) {
+        // Build workflow advancement info
+        workflowInfo = '\n\n🔄 **Workflow Auto-Advanced**\n\n';
+        workflowInfo += `**Run ID:** ${runId}\n`;
+        workflowInfo += `**Workflow Status:** ${advanceResult.workflowStatus}\n`;
+        workflowInfo += `**Summary:** ${advanceResult.message}\n\n`;
+        
+        if (advanceResult.newlyReadyTasks.length > 0) {
+          workflowInfo += `**New Ready Tasks (${advanceResult.newlyReadyTasks.length}):**\n`;
+          advanceResult.newlyReadyTasks.forEach(t => {
+            workflowInfo += `  - ${t.name} (ID: ${t.id})\n`;
+          });
+        }
+        
+        if (advanceResult.failedTasks.length > 0) {
+          workflowInfo += `\n**Failed Tasks (${advanceResult.failedTasks.length}):**\n`;
+          advanceResult.failedTasks.forEach(t => {
+            workflowInfo += `  - ${t.name} (ID: ${t.id}) - Error: ${t.error}\n`;
+          });
+        }
+        
+        if (advanceResult.workflowStatus === 'completed') {
+          workflowInfo += `\n✅ Workflow completed successfully!`;
+        } else if (advanceResult.workflowStatus === 'failed') {
+          workflowInfo += `\n❌ Workflow failed.`;
+        }
+        
+        await service.forceSave();
+      }
+    }
+  }
+
+  let resultText = `❌ Task marked as failed\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Error:** ${task.error}\n**Failed At:** ${task.completedAt}`;
+  resultText += workflowInfo;
+
   const result = {
     content: [
       {
         type: 'text',
-        text: `❌ Task marked as failed\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Error:** ${task.error}\n**Failed At:** ${task.completedAt}`
+        text: resultText
       }
     ]
   };
@@ -933,7 +1013,7 @@ export async function handleStartWorkflowExecution(
     content: [
       {
         type: 'text',
-        text: `🚀 Workflow execution started\n\n**Run ID:** ${result.runId}\n**Workflow ID:** ${validated.workflowId}\n**Ready Tasks:** ${result.readyTasks.length}\n**Ready Task Names:** ${result.readyTasks.map(t => t.name).join(', ')}`
+        text: `🚀 Workflow execution started\n\n**Run ID:** ${result.runId}\n**Workflow ID:** ${validated.workflowId}\n**Ready Tasks:** ${result.readyTasks.length}\n**Ready Task Names:** ${result.readyTasks.map(t => t.name).join(', ')}\n\n**Next Steps:**\n1. Work on the ${result.readyTasks.length} ready task(s) listed above\n2. Call execute_task (or fail_task if work fails) for each completed task\n3. Call advance_workflow_run(runId: "${result.runId}") to progress the workflow\n4. Repeat steps 1-3 until the workflow completes\n\n**Important:** Use the runId "${result.runId}" for all subsequent advance_workflow_run calls.`
       }
     ]
   };
@@ -995,6 +1075,19 @@ export async function handleAdvanceWorkflowRun(
     result.blockedTasks.forEach(t => {
       output += `  - ${t.name} (ID: ${t.id}) - Status: ${t.status}\n`;
     });
+  }
+
+  // Add actionable next steps
+  if (result.workflowStatus === 'in_progress') {
+    if (result.newlyReadyTasks.length > 0) {
+      output += `\n**Next Steps:**\n1. Work on the ${result.newlyReadyTasks.length} newly ready task(s) listed above\n2. Call execute_task (or fail_task if work fails) for each completed task\n3. Call advance_workflow_run(runId: "${result.run.id}") again to progress the workflow\n4. Repeat until the workflow completes\n`;
+    } else {
+      output += `\n**Next Steps:**\nNo new tasks are ready yet. This may mean:\n- Some tasks are still in progress\n- Tasks are blocked by dependencies\n- Check blocked tasks list above for details\n\nContinue working on in-progress tasks, then call advance_workflow_run again.\n`;
+    }
+  } else if (result.workflowStatus === 'completed') {
+    output += `\n✅ Workflow completed successfully! All tasks have been finished.\n`;
+  } else if (result.workflowStatus === 'failed') {
+    output += `\n❌ Workflow failed. See failed tasks above for details.\n`;
   }
 
   const response = {

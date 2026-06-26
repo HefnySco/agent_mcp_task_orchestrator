@@ -137,11 +137,29 @@ export class TaskOrchestratorService {
     const id = this.generateId();
     const now = new Date().toISOString();
     
-    // Validate dependencies exist
-    if (task.dependencies) {
-      for (const depId of task.dependencies) {
-        if (!this.state.tasks.has(depId)) {
-          throw new DependencyNotFoundError(depId);
+    // Resolve and validate dependencies
+    // Supports: existing task IDs, or task names (case-insensitive match against existing tasks)
+    let resolvedDeps: string[] = [];
+    if (task.dependencies && task.dependencies.length > 0) {
+      for (const dep of task.dependencies) {
+        if (this.state.tasks.has(dep)) {
+          resolvedDeps.push(dep);
+        } else {
+          // Try matching by task name (case-insensitive)
+          let nameMatch: Task | undefined;
+          for (const existingTask of this.state.tasks.values()) {
+            if (existingTask.name.toLowerCase() === dep.toLowerCase()) {
+              nameMatch = existingTask;
+              break;
+            }
+          }
+          if (nameMatch) {
+            resolvedDeps.push(nameMatch.id);
+          } else {
+            throw new DependencyNotFoundError(
+              `Dependency '${dep}' could not be resolved. Use an existing task ID or task name.`
+            );
+          }
         }
       }
     }
@@ -153,7 +171,7 @@ export class TaskOrchestratorService {
     
     // Dependencies are NOT auto-added from parentTaskId
     // Subtasks can start independently; parent waits for subtasks to complete
-    let dependencies = task.dependencies || [];
+    let dependencies = resolvedDeps;
     
     // Check for circular dependencies
     if (dependencies && dependencies.length > 0) {
@@ -329,7 +347,12 @@ export class TaskOrchestratorService {
       idMapping.set(String(i), id);
     }
 
-    // Second pass: Resolve positional dependencies to actual task IDs and validate existing IDs
+    // Second pass: Resolve dependencies to actual task IDs
+    // Supported formats:
+    // 1. Positional reference: "task-1", "task-2", etc. (1-based index in this batch)
+    // 2. Existing task ID (UUID already in state)
+    // 3. Task name within this batch (case-insensitive match)
+    // 4. Task name of an existing task in the system (case-insensitive match)
     for (let i = 0; i < tasks.length; i++) {
       const taskInput = tasks[i];
       const task = resultTasks[i];
@@ -364,9 +387,33 @@ export class TaskOrchestratorService {
           // Existing task ID reference
           resolvedDependencies.push(dep);
         } else {
-          throw new DependencyNotFoundError(
-            `Dependency '${dep}' is not a valid positional reference or existing task ID. Use 'task-N' for a task in this batch, or a valid task ID.`
+          // Try matching by task name within this batch (case-insensitive)
+          const batchMatchIndex = tasks.findIndex(
+            t => t.name.toLowerCase() === dep.toLowerCase()
           );
+          if (batchMatchIndex !== -1) {
+            const mappedId = idMapping.get(String(batchMatchIndex));
+            if (mappedId) {
+              resolvedDependencies.push(mappedId);
+              continue;
+            }
+          }
+
+          // Try matching by task name among existing tasks in the system (case-insensitive)
+          let existingNameMatch: Task | undefined;
+          for (const existingTask of this.state.tasks.values()) {
+            if (existingTask.name.toLowerCase() === dep.toLowerCase()) {
+              existingNameMatch = existingTask;
+              break;
+            }
+          }
+          if (existingNameMatch) {
+            resolvedDependencies.push(existingNameMatch.id);
+          } else {
+            throw new DependencyNotFoundError(
+              `Dependency '${dep}' could not be resolved. Use 'task-N' for a positional reference, an existing task ID, or a task name (in this batch or existing).`
+            );
+          }
         }
       }
 
@@ -1443,6 +1490,21 @@ export class TaskOrchestratorService {
    */
   getAllWorkflowRuns(): WorkflowRun[] {
     return Array.from(this.state.workflowRuns.values());
+  }
+
+  /**
+   * Find the active workflow run for a given task
+   * @param taskId - Task ID to search for
+   * @returns Workflow run ID if task is in an active workflow, null otherwise
+   */
+  findActiveWorkflowRunForTask(taskId: string): string | null {
+    for (const [runId, run] of this.state.workflowRuns.entries()) {
+      // Check if task is in this workflow and the run is still active
+      if (run.status === 'in_progress' && run.activeTaskIds.includes(taskId)) {
+        return runId;
+      }
+    }
+    return null;
   }
 
   /**

@@ -54,7 +54,6 @@ export class SqliteStorageAdapter implements IStorageAdapter {
           priority INTEGER,
           order INTEGER,
           parent_task_id TEXT,
-          session_id TEXT,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           started_at TEXT,
@@ -144,17 +143,16 @@ export class SqliteStorageAdapter implements IStorageAdapter {
           priority: row[5] as number || undefined,
           order: row[6] as number || undefined,
           parentTaskId: row[7] as string || undefined,
-          sessionId: row[8] as string || undefined,
-          createdAt: row[9] as string,
-          updatedAt: row[10] as string,
-          startedAt: row[11] as string || undefined,
-          completedAt: row[12] as string || undefined,
-          retries: row[13] as number || 0,
-          maxRetries: row[14] as number || undefined,
-          timeoutMs: row[15] as number || undefined,
-          result: this.safeJsonParse(row[16] as string, undefined, { table: 'tasks', id: taskId, field: 'result' }),
-          error: row[17] as string || undefined,
-          metadata: this.safeJsonParse(row[18] as string, undefined, { table: 'tasks', id: taskId, field: 'metadata' })
+          createdAt: row[8] as string,
+          updatedAt: row[9] as string,
+          startedAt: row[10] as string || undefined,
+          completedAt: row[11] as string || undefined,
+          retries: row[12] as number || 0,
+          maxRetries: row[13] as number || undefined,
+          timeoutMs: row[14] as number || undefined,
+          result: this.safeJsonParse(row[15] as string, undefined, { table: 'tasks', id: taskId, field: 'result' }),
+          error: row[16] as string || undefined,
+          metadata: this.safeJsonParse(row[17] as string, undefined, { table: 'tasks', id: taskId, field: 'metadata' })
         };
         tasks.set(task.id, task);
       }
@@ -225,9 +223,9 @@ export class SqliteStorageAdapter implements IStorageAdapter {
         this.db!.run(`
           INSERT INTO tasks (
             id, name, description, status, dependencies, priority, order,
-            parent_task_id, session_id, created_at, updated_at, started_at,
+            parent_task_id, created_at, updated_at, started_at,
             completed_at, retries, max_retries, timeout_ms, result, error, metadata
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
           task.id,
           task.name,
@@ -237,7 +235,6 @@ export class SqliteStorageAdapter implements IStorageAdapter {
           task.priority || null,
           task.order || null,
           task.parentTaskId || null,
-          task.sessionId || null,
           task.createdAt,
           task.updatedAt,
           task.startedAt || null,

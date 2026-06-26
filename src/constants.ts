@@ -36,7 +36,7 @@ export const ERROR_MESSAGES = {
   INVALID_TASK_STATUS: 'Invalid task status',
   DEPENDENCY_NOT_MET: 'Dependencies not met',
   TASK_CANNOT_BE_EXECUTED: 'Task cannot be executed',
-  TASK_CANNOT_BE_MARKED_IN_PROGRESS: 'Task cannot be marked as in progress'
+  TASK_CANNOT_BE_STARTED: 'Task cannot be started'
 } as const;
 
 /**

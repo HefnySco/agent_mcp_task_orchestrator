@@ -50,7 +50,6 @@ export const CreateTaskSchema = z.object({
   priority: z.number().int().min(0).optional(),
   order: z.number().int().min(0).optional(),
   parentTaskId: z.string().optional().nullable(),
-  sessionId: z.string().optional().nullable(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   maxRetries: z.number().int().min(0).optional(),
   timeoutMs: z.number().int().min(0).optional(),
@@ -75,7 +74,6 @@ export const UpdateTaskSchema = z.object({
   priority: z.number().int().min(0).optional(),
   order: z.number().int().min(0).optional(),
   parentTaskId: z.string().optional().nullable(),
-  sessionId: z.string().optional().nullable(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   timeoutMs: z.number().int().min(0).optional()
 });
@@ -123,9 +121,9 @@ export const CreateWorkflowSchema = z.object({
 export const TaskStatusFilterSchema = z.enum(['pending', 'in_progress', 'completed', 'failed']).optional();
 
 /**
- * Zod schema for executing a task
+ * Zod schema for completing a task
  */
-export const ExecuteTaskSchema = z.object({
+export const CompleteTaskSchema = z.object({
   id: z.string().min(1, 'Task ID is required'),
   result: z.unknown().optional(),
   autoAdvance: z.boolean().optional().default(true)
@@ -141,9 +139,9 @@ export const FailTaskSchema = z.object({
 });
 
 /**
- * Zod schema for marking task in progress
+ * Zod schema for starting a task
  */
-export const MarkInProgressSchema = z.object({
+export const StartTaskSchema = z.object({
   id: z.string().min(1, 'Task ID is required')
 });
 
@@ -214,7 +212,7 @@ export type CreateWorkflowInput = z.infer<typeof CreateWorkflowSchema>;
 /**
  * Type inference for execute task input
  */
-export type ExecuteTaskInput = z.infer<typeof ExecuteTaskSchema>;
+export type CompleteTaskInput = z.infer<typeof CompleteTaskSchema>;
 
 /**
  * Type inference for fail task input
@@ -266,7 +264,6 @@ export const MoveTaskSchema = z.object({
  * Zod schema for getting dependency graph
  */
 export const GetDependencyGraphSchema = z.object({
-  sessionId: z.string().optional(),
   workflowId: z.string().optional()
 });
 
@@ -274,7 +271,6 @@ export const GetDependencyGraphSchema = z.object({
  * Zod schema for exporting Mermaid diagram
  */
 export const ExportMermaidSchema = z.object({
-  sessionId: z.string().optional(),
   workflowId: z.string().optional()
 });
 
@@ -282,7 +278,6 @@ export const ExportMermaidSchema = z.object({
  * Zod schema for getting blocked tasks
  */
 export const GetBlockedTasksSchema = z.object({
-  sessionId: z.string().optional(),
   workflowId: z.string().optional()
 });
 

@@ -84,16 +84,16 @@ class TaskOrchestratorMCPServer {
           // ============================================================================
           // USAGE MODES
           // ============================================================================
-          // 
+          //
           // This MCP server supports two usage modes:
           //
           // 1. SIMPLE MODE (for basic task management):
-          //    - create_tasks → mark_in_progress → execute_task
+          //    - create_tasks → start_task → complete_task
           //    - Use this for simple, ad-hoc tasks without complex dependencies
           //
           // 2. RECOMMENDED WORKFLOW MODE (for organized task execution):
           //    - create_tasks → create_workflow → start_workflow_execution
-          //    - [do work on ready tasks] → execute_task/fail_task → advance_workflow_run
+          //    - [do work on ready tasks] → complete_task/fail_task → advance_workflow_run
           //    - Repeat the [do work] → advance cycle until workflow completes
           //    - Use this for complex, multi-step workflows with dependencies
           //
@@ -104,7 +104,7 @@ class TaskOrchestratorMCPServer {
           // ============================================================================
           {
             name: 'create_tasks',
-            description: 'Create one or more tasks with optional dependencies and parent tasks. IMPORTANT: For new independent task groups/sessions, strongly prefer using create_workflow instead to keep tasks organized and avoid hanging tasks. When creating tasks outside a workflow context, always include a meaningful sessionId (top-level field, e.g., "bugfix-123", "feature-auth") to group related tasks together. Subtasks created with parentTaskId automatically inherit sessionId from their parent. Duplicate tasks are skipped by default (use deduplication: "none" per task to force creation). Dependencies can be specified as: positional references (task-1, task-2, etc.) within the same batch, existing task IDs, or task names (matched case-insensitively against tasks in this batch and existing tasks). Dependencies also support a rich object form with type (hard/soft/conditional/external), onFailure policy, condition, url, timeoutMs, and metadata. CRITICAL: For parentTaskId, you MUST use actual existing task IDs - create the parent task first, get its ID from the response, then create subtasks using that ID. Do not use positional references or task names for parentTaskId.',
+            description: 'Create one or more tasks with optional dependencies and parent tasks. IMPORTANT: For new independent task groups, strongly prefer using create_workflow instead to keep tasks organized and avoid hanging tasks. Duplicate tasks are skipped by default (use deduplication: "none" per task to force creation). Dependencies can be specified as: positional references (task-1, task-2, etc.) within the same batch, existing task IDs, or task names (matched case-insensitively against tasks in this batch and existing tasks). Dependencies also support a rich object form with type (hard/soft/conditional/external), onFailure policy, condition, url, timeoutMs, and metadata. CRITICAL: For parentTaskId, you MUST use actual existing task IDs - create the parent task first, get its ID from the response, then create subtasks using that ID. Do not use positional references or task names for parentTaskId.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -153,11 +153,7 @@ class TaskOrchestratorMCPServer {
                       },
                       parentTaskId: {
                         type: 'string',
-                        description: 'Optional parent task ID for creating subtasks. Subtasks inherit sessionId from parent. CRITICAL: Must be an actual existing task ID, NOT a positional reference (task-1, task-2). Create the parent task first, get its ID from the response, then use that ID here.'
-                      },
-                      sessionId: {
-                        type: 'string',
-                        description: 'Optional session ID for grouping related tasks (top-level field, e.g., "feature-auth")'
+                        description: 'Optional parent task ID for creating subtasks. CRITICAL: Must be an actual existing task ID, NOT a positional reference (task-1, task-2). Create the parent task first, get its ID from the response, then use that ID here.'
                       },
                       metadata: {
                         type: 'object',
@@ -170,7 +166,7 @@ class TaskOrchestratorMCPServer {
                       deduplication: {
                         type: 'string',
                         enum: ['skip', 'reuse', 'error', 'none'],
-                        description: 'How to handle duplicate tasks (same name/sessionId/parent). Default is skip.'
+                        description: 'How to handle duplicate tasks (same name/parent). Default is skip.'
                       }
                     },
                     required: ['name']
@@ -183,7 +179,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'update_task',
-            description: 'Update an existing task. You can add or update the sessionId in metadata to better organize tasks into sessions. Dependencies support both string shorthand and RichDependency objects.',
+            description: 'Update an existing task. Dependencies support both string shorthand and RichDependency objects.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -235,7 +231,7 @@ class TaskOrchestratorMCPServer {
                 },
                 metadata: {
                   type: 'object',
-                  description: 'New metadata for the task. Include sessionId here to group related tasks (e.g., { "sessionId": "feature-auth" })'
+                  description: 'New metadata for the task'
                 }
               },
               required: ['id']
@@ -285,7 +281,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'list_tasks',
-            description: 'List all tasks or filter by status. Tasks are organized by sessionId (in metadata) or workflow membership. Use this to review task organization and identify tasks that need session grouping. Consider using create_workflow to group related tasks into coherent sessions for better management.',
+            description: 'List all tasks or filter by status. Tasks are organized by workflow membership. Use this to review task organization and identify tasks that need workflow grouping. Consider using create_workflow to group related tasks for better management.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -298,14 +294,14 @@ class TaskOrchestratorMCPServer {
             }
           },
           {
-            name: 'execute_task',
-            description: 'Mark a task as completed with a result. **Auto-Advance Feature:** When a task belongs to an active workflow run, this tool automatically advances the workflow (no need to call advance_workflow_run manually). The response will include workflow information showing newly ready tasks and workflow status. To disable auto-advance, set autoAdvance: false. The result parameter expects an object directly, NOT a JSON string.',
+            name: 'complete_task',
+            description: 'Mark a task as completed and optionally provide a result. This is the main tool to use when you finish working on a task. **When used inside an active workflow, this automatically advances the workflow** and unlocks the next ready tasks. The response will include workflow information showing newly ready tasks and workflow status. To disable auto-advance, set autoAdvance: false. The result parameter expects an object directly, NOT a JSON string.',
             inputSchema: {
               type: 'object',
               properties: {
                 id: {
                   type: 'string',
-                  description: 'The ID of the task to execute'
+                  description: 'The ID of the task to complete'
                 },
                 result: {
                   type: 'object',
@@ -321,7 +317,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'fail_task',
-            description: 'Mark a task as failed with an error message. **Auto-Advance Feature:** When a task belongs to an active workflow run, this tool automatically advances the workflow (no need to call advance_workflow_run manually). The response will include workflow information showing newly ready tasks and workflow status. To disable auto-advance, set autoAdvance: false. The workflow system will handle failure propagation based on dependency rules.',
+            description: 'Mark a task as failed with an error message. **When used inside an active workflow, this automatically advances the workflow** and the system will handle failure propagation based on dependency rules. The response will include workflow information showing newly ready tasks and workflow status. To disable auto-advance, set autoAdvance: false.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -342,14 +338,14 @@ class TaskOrchestratorMCPServer {
             }
           },
           {
-            name: 'mark_in_progress',
-            description: 'Mark a task as in progress. **For workflows:** Prefer using start_workflow_execution + advance_workflow_run. Only use mark_in_progress manually when working with tasks outside of a workflow context. When using workflows, the execution system automatically handles task state transitions, so manual mark_in_progress calls are unnecessary and can cause errors like "Task is already in_progress".',
+            name: 'start_task',
+            description: 'Mark a task as in progress. **Use this only when working with standalone tasks outside of workflows.** In workflow-based execution, tasks are usually marked as in progress automatically when they become ready.',
             inputSchema: {
               type: 'object',
               properties: {
                 id: {
                   type: 'string',
-                  description: 'The ID of the task to mark as in progress'
+                  description: 'The ID of the task to start'
                 }
               },
               required: ['id']
@@ -407,7 +403,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'create_workflow',
-            description: 'Create a workflow (group of tasks in sequence). RECOMMENDED: Use workflows for new independent task groups/sessions instead of loose tasks. Workflows provide automatic task grouping, dependency-aware execution, session isolation, and easier cleanup. This is the preferred way to organize coherent task groups (e.g., "deploy-production", "fix-bug-123", "feature-implementation").\n\n**Recommended Usage:**\n1. Create tasks using create_tasks\n2. Create a workflow with those tasks using create_workflow\n3. Start execution with start_workflow_execution (returns runId + ready tasks)\n4. Perform work on ready tasks, then call execute_task/fail_task\n5. Call advance_workflow_run(runId) to progress the workflow\n6. Repeat steps 4-5 until workflow completes\n\nThis pattern ensures proper task state management and avoids confusion with manual mark_in_progress calls.',
+            description: 'Create a workflow (group of tasks in sequence). **RECOMMENDED:** Use workflows for new independent task groups/sessions instead of loose tasks. Workflows provide automatic task grouping, dependency-aware execution, session isolation, and easier cleanup. This is the preferred way to organize coherent task groups (e.g., "deploy-production", "fix-bug-123", "feature-implementation").\n\n**Recommended Usage:**\n1. Create tasks using create_tasks\n2. Create a workflow with those tasks using create_workflow\n3. Start execution with start_workflow_execution (returns runId + ready tasks)\n4. Perform work on ready tasks, then call complete_task/fail_task\n5. Call advance_workflow_run(runId) to progress the workflow\n6. Repeat steps 4-5 until workflow completes\n\nThis pattern ensures proper task state management and avoids confusion with manual start_task calls.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -464,7 +460,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'start_workflow_execution',
-            description: 'Start execution of a workflow with dependency-aware task initialization. Automatically finds and marks all initially ready tasks as in_progress. Returns runId and list of ready tasks.\n\n**Recommended Workflow Execution Pattern (with auto-advance):**\n1. Call start_workflow_execution to get runId and ready tasks\n2. Perform work on ready tasks\n3. Call execute_task (or fail_task) - this automatically advances the workflow\n4. The response shows newly ready tasks - continue working on them\n5. Repeat steps 3-4 until workflow completes\n\n**Note:** execute_task and fail_task now auto-advance workflows by default, so you typically do not need to call advance_workflow_run manually. Use advance_workflow_run only if you disabled auto-advance or need manual control.\n\n**Important:** Do NOT call mark_in_progress manually when using workflows - the workflow execution system handles task state automatically.',
+            description: 'Start execution of a workflow with dependency-aware task initialization. Automatically finds and marks all initially ready tasks as in_progress. Returns runId and list of ready tasks.\n\n**RECOMMENDED Workflow Execution Pattern (with auto-advance):**\n1. Call start_workflow_execution to get runId and ready tasks\n2. Perform work on ready tasks\n3. Call complete_task (or fail_task) - this automatically advances the workflow\n4. The response shows newly ready tasks - continue working on them\n5. Repeat steps 3-4 until workflow completes\n\n**Note:** complete_task and fail_task auto-advance workflows by default, so you typically do not need to call advance_workflow_run manually. Use advance_workflow_run only if you disabled auto-advance or need manual control.\n\n**Important:** Do NOT call start_task manually when using workflows - the workflow execution system handles task state automatically.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -478,7 +474,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'advance_workflow_run',
-            description: 'Advance a workflow run by finding newly unlocked tasks after tasks are completed/failed. Returns detailed information including completed tasks, failed tasks, newly ready tasks, blocked tasks, workflow status, and a human-readable summary. Supports smart failure handling that only fails the workflow when no paths forward remain (unless continueOnFailure is enabled).\n\n**When to Use This Tool:**\n- Typically NOT needed - execute_task and fail_task auto-advance workflows by default\n- Use this if you disabled auto-advance (autoAdvance: false) in execute_task/fail_task\n- Use this for manual control over workflow progression\n- Use this to check workflow status without completing tasks\n\n**What the Response Tells You:**\n- Current workflow status (in_progress, completed, failed)\n- Which tasks just completed or failed\n- List of newly ready tasks you should work on next\n- Any blocked tasks waiting for dependencies\n- A human-readable summary of what happened\n\n**Important:** Always use the runId returned by start_workflow_execution for all subsequent calls to this tool.',
+            description: 'Advance a workflow run by finding newly unlocked tasks after tasks are completed/failed. Returns detailed information including completed tasks, failed tasks, newly ready tasks, blocked tasks, workflow status, and a human-readable summary. Supports smart failure handling that only fails the workflow when no paths forward remain (unless continueOnFailure is enabled).\n\n**When to Use This Tool:**\n- Typically NOT needed - complete_task and fail_task auto-advance workflows by default\n- Use this if you disabled auto-advance (autoAdvance: false) in complete_task/fail_task\n- Use this for manual control over workflow progression\n- Use this to check workflow status without completing tasks\n\n**What the Response Tells You:**\n- Current workflow status (in_progress, completed, failed)\n- Which tasks just completed or failed\n- List of newly ready tasks you should work on next\n- Any blocked tasks waiting for dependencies\n- A human-readable summary of what happened\n\n**Important:** Always use the runId returned by start_workflow_execution for all subsequent calls to this tool.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -514,7 +510,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'get_next_workflow_tasks',
-            description: 'Get tasks that are ready to execute within a specific workflow (dependency-aware). Useful for checking what can be worked on next in a workflow context. Note: When using the recommended workflow execution pattern (start_workflow_execution → execute_task → advance_workflow_run), you typically do not need to call this tool separately, as advance_workflow_run will tell you which tasks are newly ready. Use this tool if you want to inspect ready tasks without advancing the workflow state.',
+            description: 'Get tasks that are ready to execute within a specific workflow (dependency-aware). Useful for checking what can be worked on next in a workflow context. Note: When using the recommended workflow execution pattern (start_workflow_execution → complete_task → advance_workflow_run), you typically do not need to call this tool separately, as advance_workflow_run will tell you which tasks are newly ready. Use this tool if you want to inspect ready tasks without advancing the workflow state.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -528,7 +524,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'get_stats',
-            description: 'Get statistics about tasks and workflows. Use this to monitor task organization and session health. Well-organized tasks should be grouped by sessionId or workflow. Consider creating workflows for loose task groups to improve session management.',
+            description: 'Get statistics about tasks and workflows. Use this to monitor task organization and workflow health. Well-organized tasks should be grouped by workflow. Consider creating workflows for loose task groups to improve workflow management.',
             inputSchema: {
               type: 'object',
               properties: {}
@@ -591,7 +587,7 @@ class TaskOrchestratorMCPServer {
                 },
                 deleteDuplicates: {
                   type: 'boolean',
-                  description: 'Delete duplicate tasks (same name/sessionId/parentTaskId), keeping the oldest'
+                  description: 'Delete duplicate tasks (same name/parentTaskId), keeping the oldest'
                 },
                 deleteStalePending: {
                   type: 'boolean',
@@ -709,14 +705,10 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'get_dependency_graph',
-            description: 'Get the dependency graph for a session or workflow. Returns nodes (tasks) and edges (dependencies).',
+            description: 'Get the dependency graph for a workflow. Returns nodes (tasks) and edges (dependencies).',
             inputSchema: {
               type: 'object',
               properties: {
-                sessionId: {
-                  type: 'string',
-                  description: 'Optional session ID to filter by'
-                },
                 workflowId: {
                   type: 'string',
                   description: 'Optional workflow ID to filter by'
@@ -730,10 +722,6 @@ class TaskOrchestratorMCPServer {
             inputSchema: {
               type: 'object',
               properties: {
-                sessionId: {
-                  type: 'string',
-                  description: 'Optional session ID to filter by'
-                },
                 workflowId: {
                   type: 'string',
                   description: 'Optional workflow ID to filter by'
@@ -747,10 +735,6 @@ class TaskOrchestratorMCPServer {
             inputSchema: {
               type: 'object',
               properties: {
-                sessionId: {
-                  type: 'string',
-                  description: 'Optional session ID to filter by'
-                },
                 workflowId: {
                   type: 'string',
                   description: 'Optional workflow ID to filter by'
@@ -779,24 +763,6 @@ class TaskOrchestratorMCPServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
 
-      // Extract sessionId from args if available for logging
-      let sessionId: string | undefined;
-      if (args && typeof args === 'object') {
-        const tasks = (args as any).tasks;
-        if (Array.isArray(tasks) && tasks.length > 0) {
-          sessionId = tasks[0]?.metadata?.sessionId;
-        }
-        if (!sessionId) {
-          sessionId = (args as any).metadata?.sessionId;
-        }
-      }
-
-      // Log LLM response if available (MCP SDK doesn't provide this directly,
-      // but we can log the tool call context)
-      if (sessionId) {
-        this.logger.debug(`Tool call with sessionId: ${name}`, { tool: name, sessionId });
-      }
-
       const handler = handlerRegistry[name];
       if (!handler) {
         this.logger.error(`Unknown tool: ${name}`);
@@ -819,7 +785,7 @@ class TaskOrchestratorMCPServer {
         };
         return await handler(context, args || {});
       } catch (error) {
-        this.logger.error(`Error executing tool ${name}`, { error, sessionId });
+        this.logger.error(`Error executing tool ${name}`, { error });
 
         if (error instanceof ZodError) {
           return {

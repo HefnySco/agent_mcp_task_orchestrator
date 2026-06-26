@@ -33,7 +33,6 @@ export interface Task {
   priority?: number;   // higher = more important; used in composite scheduling score
   order?: number;      // explicit position among siblings under same parent
   parentTaskId?: string;
-  sessionId?: string; // Optional session ID for grouping unattached tasks
   createdAt: string;
   updatedAt: string;
   startedAt?: string;
@@ -57,11 +56,10 @@ export type DeduplicationStrategy = 'skip' | 'reuse' | 'error' | 'none';
 export interface CreateTaskInput {
   name: string;
   description?: string;
-  dependencies?: RichDependency[];
+  dependencies?: (string | RichDependency)[];
   priority?: number;
   order?: number;
   parentTaskId?: string;
-  sessionId?: string; // Optional session ID for grouping unattached tasks
   metadata?: Record<string, unknown>;
   maxRetries?: number;
   timeoutMs?: number;
@@ -86,7 +84,6 @@ export interface UpdateTaskInput {
   priority?: number;
   order?: number;
   parentTaskId?: string;
-  sessionId?: string; // Optional session ID for grouping unattached tasks
   metadata?: Record<string, unknown>;
   result?: unknown;
   error?: string;
@@ -228,5 +225,4 @@ export interface LogEntry {
   content?: string;
   toolCalls?: any[];
   relatedTools?: string[];
-  sessionId?: string;
 }

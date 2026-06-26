@@ -88,20 +88,6 @@ for (const testCase of testCases) {
         assert.strictEqual(childTask.parentTaskId, parentTask.id);
       });
 
-      it('should create a task with a sessionId', () => {
-        const task = service.createTask({ name: 'Task with Session', sessionId: 'session-123' });
-
-        assert.strictEqual(task.sessionId, 'session-123');
-      });
-
-      it('should update task sessionId', () => {
-        const task = service.createTask({ name: 'Task' });
-        const updated = service.updateTask(task.id, { sessionId: 'session-456' });
-
-        assert.ok(updated);
-        assert.strictEqual(updated?.sessionId, 'session-456');
-      });
-
       it('should throw error when parent task does not exist', () => {
         assert.throws(() => {
           service.createTask({
@@ -347,10 +333,10 @@ for (const testCase of testCases) {
       });
 
       it('should skip duplicate tasks when deduplication is skip', () => {
-        service.createTasks([{ name: 'Task A', sessionId: 'session-1' }]);
+        service.createTasks([{ name: 'Task A' }]);
 
         const created = service.createTasks(
-          [{ name: 'Task A', sessionId: 'session-1' }],
+          [{ name: 'Task A' }],
           { defaultDeduplication: 'skip' }
         );
 
@@ -359,44 +345,26 @@ for (const testCase of testCases) {
       });
 
       it('should error on duplicate tasks when deduplication is error', () => {
-        service.createTasks([{ name: 'Task A', sessionId: 'session-1' }]);
+        service.createTasks([{ name: 'Task A' }]);
 
         assert.throws(() => {
           service.createTasks(
-            [{ name: 'Task A', sessionId: 'session-1' }],
+            [{ name: 'Task A' }],
             { defaultDeduplication: 'error' }
           );
         }, /Duplicate task detected/);
       });
 
       it('should create duplicates when deduplication is none', () => {
-        service.createTasks([{ name: 'Task A', sessionId: 'session-1' }]);
+        service.createTasks([{ name: 'Task A' }]);
 
         const created = service.createTasks(
-          [{ name: 'Task A', sessionId: 'session-1' }],
+          [{ name: 'Task A' }],
           { defaultDeduplication: 'none' }
         );
 
         assert.strictEqual(created.length, 1);
         assert.strictEqual(service.getAllTasks().filter(t => t.name === 'Task A').length, 2);
-      });
-
-      it('should inherit sessionId from parent when creating subtasks', () => {
-        const parent = service.createTask({ name: 'Parent', sessionId: 'parent-session' });
-        const child = service.createTasks(
-          [{ name: 'Child', parentTaskId: parent.id }]
-        );
-
-        assert.strictEqual(child[0].sessionId, 'parent-session');
-      });
-
-      it('should allow explicit sessionId to override parent sessionId', () => {
-        const parent = service.createTask({ name: 'Parent', sessionId: 'parent-session' });
-        const child = service.createTasks(
-          [{ name: 'Child', parentTaskId: parent.id, sessionId: 'child-session' }]
-        );
-
-        assert.strictEqual(child[0].sessionId, 'child-session');
       });
     });
 
@@ -1220,8 +1188,8 @@ for (const testCase of testCases) {
       });
 
       it('should detect duplicate tasks', () => {
-        service.createTask({ name: 'Dup', sessionId: 's1' });
-        service.createTask({ name: 'Dup', sessionId: 's1' });
+        service.createTask({ name: 'Dup' });
+        service.createTask({ name: 'Dup' });
 
         const result = service.cleanupTasks();
         assert.strictEqual(result.duplicateTasks, 1);
@@ -1229,8 +1197,8 @@ for (const testCase of testCases) {
       });
 
       it('should delete duplicate tasks keeping oldest', () => {
-        const first = service.createTask({ name: 'Dup', sessionId: 's1' });
-        service.createTask({ name: 'Dup', sessionId: 's1' });
+        const first = service.createTask({ name: 'Dup' });
+        service.createTask({ name: 'Dup' });
 
         const result = service.cleanupTasks({ deleteDuplicates: true });
         assert.strictEqual(result.duplicateTasks, 1);
@@ -1648,6 +1616,148 @@ for (const testCase of testCases) {
         assert.strictEqual(run!.readyTasks.length, 2);
         assert.ok(run!.readyTasks.some(t => t.id === task1.id));
         assert.ok(run!.readyTasks.some(t => t.id === task2.id));
+      });
+
+      describe('Bug Fix: Tasks with positional dependencies should not disappear', () => {
+        it('should retain all tasks when creating workflow with positional dependencies', () => {
+          // Reproduce the bug from the test report
+          const tasks = service.createTasks([
+            { name: 'Test Task 1', priority: 5 },
+            { name: 'Test Task 2', priority: 3, dependencies: ['task-1'] },
+            { name: 'Test Task 3', priority: 1 }
+          ]);
+
+          assert.strictEqual(tasks.length, 3);
+
+          // All tasks should be retrievable via getTask
+          const task1 = service.getTask(tasks[0].id);
+          const task2 = service.getTask(tasks[1].id);
+          const task3 = service.getTask(tasks[2].id);
+
+          assert.ok(task1, 'Task 1 should exist');
+          assert.ok(task2, 'Task 2 should exist');
+          assert.ok(task3, 'Task 3 should exist');
+
+          // All tasks should appear in getAllTasks
+          const allTasks = service.getAllTasks();
+          assert.strictEqual(allTasks.length, 3);
+          assert.ok(allTasks.some(t => t.id === tasks[0].id));
+          assert.ok(allTasks.some(t => t.id === tasks[1].id));
+          assert.ok(allTasks.some(t => t.id === tasks[2].id));
+
+          // Task 2 should have its dependency resolved
+          assert.strictEqual(task2?.dependencies.length, 1);
+          assert.strictEqual(task2?.dependencies[0], tasks[0].id);
+        });
+
+        it('should retain all tasks when creating workflow with positional dependencies and starting execution', () => {
+          const tasks = service.createTasks([
+            { name: 'Test Task 1', priority: 5 },
+            { name: 'Test Task 2', priority: 3, dependencies: ['task-1'] },
+            { name: 'Test Task 3', priority: 1 }
+          ]);
+
+          const workflow = service.createWorkflow('Test Workflow', tasks.map(t => t.id));
+          const run = service.startWorkflowExecution(workflow.id);
+
+          assert.ok(run);
+
+          // All tasks should still be retrievable after workflow execution starts
+          const task1 = service.getTask(tasks[0].id);
+          const task2 = service.getTask(tasks[1].id);
+          const task3 = service.getTask(tasks[2].id);
+
+          assert.ok(task1, 'Task 1 should exist after workflow start');
+          assert.ok(task2, 'Task 2 should exist after workflow start');
+          assert.ok(task3, 'Task 3 should exist after workflow start');
+
+          // Only Task 1 and Task 3 should be ready (Task 2 depends on Task 1)
+          assert.strictEqual(run!.readyTasks.length, 2);
+          assert.ok(run!.readyTasks.some(t => t.id === tasks[0].id));
+          assert.ok(run!.readyTasks.some(t => t.id === tasks[2].id));
+          assert.ok(!run!.readyTasks.some(t => t.id === tasks[1].id));
+        });
+
+        it('should correctly track blocked tasks in workflow with positional dependencies', () => {
+          const tasks = service.createTasks([
+            { name: 'Test Task 1', priority: 5 },
+            { name: 'Test Task 2', priority: 3, dependencies: ['task-1'] },
+            { name: 'Test Task 3', priority: 1 }
+          ]);
+
+          const workflow = service.createWorkflow('Test Workflow', tasks.map(t => t.id));
+          const run = service.startWorkflowExecution(workflow.id);
+
+          assert.ok(run);
+
+          // Get the workflow run to check blocked tasks
+          const workflowRun = service.getWorkflowRun(run!.runId);
+          assert.ok(workflowRun);
+
+          // Task 2 should be in blockedTaskIds
+          assert.ok(workflowRun!.blockedTaskIds.includes(tasks[1].id));
+        });
+
+        it('should complete workflow successfully when all tasks are finished', () => {
+          const tasks = service.createTasks([
+            { name: 'Test Task 1', priority: 5 },
+            { name: 'Test Task 2', priority: 3, dependencies: ['task-1'] },
+            { name: 'Test Task 3', priority: 1 }
+          ]);
+
+          const workflow = service.createWorkflow('Test Workflow', tasks.map(t => t.id));
+          const run = service.startWorkflowExecution(workflow.id);
+
+          assert.ok(run);
+
+          // Complete Task 1
+          service.executeTask(tasks[0].id);
+          service.advanceWorkflowRun(run!.runId);
+
+          // Complete Task 3
+          service.executeTask(tasks[2].id);
+          const advanceResult = service.advanceWorkflowRun(run!.runId);
+
+          // Task 2 should now be ready
+          assert.ok(advanceResult);
+          assert.strictEqual(advanceResult!.newlyReadyTasks.length, 1);
+          assert.strictEqual(advanceResult!.newlyReadyTasks[0].id, tasks[1].id);
+
+          // Complete Task 2
+          service.executeTask(tasks[1].id);
+          const finalAdvance = service.advanceWorkflowRun(run!.runId);
+
+          // Workflow should be completed
+          assert.ok(finalAdvance);
+          assert.strictEqual(finalAdvance!.workflowStatus, 'completed');
+        });
+
+        it('should maintain consistent state between get_task, list_tasks, and get_dependency_graph', () => {
+          const tasks = service.createTasks([
+            { name: 'Test Task 1', priority: 5 },
+            { name: 'Test Task 2', priority: 3, dependencies: ['task-1'] },
+            { name: 'Test Task 3', priority: 1 }
+          ]);
+
+          const workflow = service.createWorkflow('Test Workflow', tasks.map(t => t.id));
+          service.startWorkflowExecution(workflow.id);
+
+          // Check consistency across different retrieval methods
+          const allTasks = service.getAllTasks();
+          assert.strictEqual(allTasks.length, 3);
+
+          // Each task should be retrievable individually
+          for (const task of tasks) {
+            const retrieved = service.getTask(task.id);
+            assert.ok(retrieved, `Task ${task.name} should be retrievable via getTask`);
+            assert.strictEqual(retrieved?.id, task.id);
+          }
+
+          // Dependency graph should include all tasks
+          const depGraph = service.getDependencyGraph(workflow.id);
+          assert.ok(depGraph);
+          assert.strictEqual(depGraph!.nodes.length, 3);
+        });
       });
     });
   });

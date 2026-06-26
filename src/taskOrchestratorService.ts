@@ -197,15 +197,6 @@ export class TaskOrchestratorService {
     if (resolvedDeps.length > 0) {
       this.checkDependencyCycle(id, resolvedDeps);
     }
-
-    // Inherit sessionId from parent if not explicitly provided
-    let sessionId = task.sessionId;
-    if (!sessionId && task.parentTaskId) {
-      const parentTask = this.state.tasks.get(task.parentTaskId);
-      if (parentTask) {
-        sessionId = parentTask.sessionId;
-      }
-    }
     
     const newTask: Task = {
       id,
@@ -215,7 +206,6 @@ export class TaskOrchestratorService {
       priority: task.priority,
       order: task.order,
       parentTaskId: task.parentTaskId,
-      sessionId,
       metadata: task.metadata,
       maxRetries: task.maxRetries,
       timeoutMs: task.timeoutMs,
@@ -242,7 +232,7 @@ export class TaskOrchestratorService {
    * to existing task IDs:
    * 1. First pass: Deduplicate against existing tasks and create new tasks without dependencies
    * 2. Second pass: Resolve positional dependencies to actual task IDs, and validate existing IDs
-   * 3. Third pass: Auto-add parentTaskId to dependencies if provided, inherit sessionId from parent
+   * 3. Third pass: Auto-add parentTaskId to dependencies if provided
    * 4. Fourth pass: Validate dependencies and check for circular references
    *
    * Supported dependency formats:
@@ -262,14 +252,13 @@ export class TaskOrchestratorService {
    * ]
    *
    * Deduplication:
-   * By default, a task is considered a duplicate if it has the same name, sessionId, and
+   * By default, a task is considered a duplicate if it has the same name and
    * parentTaskId as an existing task. The default behavior is 'none' (always create). Pass
    * deduplication: 'skip' (or 'reuse') to return the existing task instead of creating a
    * duplicate. Pass 'error' to throw when a duplicate exists.
    *
    * Note: If parentTaskId is provided, it is automatically added to the task's dependencies
-   * to ensure the subtask only becomes ready after the parent is completed. Subtasks also
-   * inherit sessionId from their parent if they don't specify one.
+   * to ensure the subtask only becomes ready after the parent is completed.
    */
   createTasks(
     tasks: CreateTaskInput[],
@@ -281,17 +270,14 @@ export class TaskOrchestratorService {
 
     // Helper: build a deduplication key from an input
     const dedupKey = (input: CreateTaskInput): string => {
-      const sessionId = input.sessionId || (input.parentTaskId
-        ? this.state.tasks.get(input.parentTaskId)?.sessionId
-        : undefined) || '__no_session__';
-      return `${input.name.toLowerCase()}|${sessionId}|${input.parentTaskId || '__no_parent__'}`;
+      return `${input.name.toLowerCase()}|${input.parentTaskId || '__no_parent__'}`;
     };
 
     // Helper: find existing duplicate task
     const findDuplicate = (input: CreateTaskInput): Task | undefined => {
       const key = dedupKey(input);
       for (const task of this.state.tasks.values()) {
-        const taskKey = `${task.name.toLowerCase()}|${task.sessionId || '__no_session__'}|${task.parentTaskId || '__no_parent__'}`;
+        const taskKey = `${task.name.toLowerCase()}|${task.parentTaskId || '__no_parent__'}`;
         if (taskKey === key) {
           return task;
         }
@@ -317,7 +303,7 @@ export class TaskOrchestratorService {
         if (duplicate) {
           if (strategy === 'error') {
             throw new ValidationError(
-              `Duplicate task detected: '${taskInput.name}' already exists in session '${duplicate.sessionId || 'none'}' (ID: ${duplicate.id}). Use deduplication 'skip' to reuse it.`
+              `Duplicate task detected: '${taskInput.name}' already exists (ID: ${duplicate.id}). Use deduplication 'skip' to reuse it.`
             );
           }
           // 'skip' or 'reuse': return existing task
@@ -330,15 +316,6 @@ export class TaskOrchestratorService {
       const id = this.generateId();
       const now = new Date().toISOString();
 
-      // Inherit sessionId from parent if not explicitly provided
-      let sessionId = taskInput.sessionId;
-      if (!sessionId && taskInput.parentTaskId) {
-        const parentTask = this.state.tasks.get(taskInput.parentTaskId);
-        if (parentTask) {
-          sessionId = parentTask.sessionId;
-        }
-      }
-
       const newTask: Task = {
         id,
         name: taskInput.name,
@@ -347,7 +324,6 @@ export class TaskOrchestratorService {
         priority: taskInput.priority,
         order: taskInput.order,
         parentTaskId: taskInput.parentTaskId,
-        sessionId,
         metadata: taskInput.metadata,
         maxRetries: taskInput.maxRetries,
         timeoutMs: taskInput.timeoutMs,
@@ -370,7 +346,7 @@ export class TaskOrchestratorService {
     // 3. Task name within this batch (case-insensitive match)
     // 4. Task name of an existing task in the system (case-insensitive match)
     // 5. Full RichDependency object (with taskId as string or positional ref)
-    for (let i = 0; i < tasks.length; i++) {
+    for (let i = 0; i < resultTasks.length; i++) {
       const taskInput = tasks[i];
       const task = resultTasks[i];
 
@@ -1225,7 +1201,7 @@ export class TaskOrchestratorService {
    * Identifies and optionally deletes:
    * - Orphaned subtasks: tasks with parentTaskId pointing to a non-existent parent
    * - Parent-completed subtasks: subtasks whose parent is completed but subtasks are still pending
-   * - Duplicate tasks: tasks with the same name/sessionId/parentTaskId as another (keeps oldest)
+   * - Duplicate tasks: tasks with the same name/parentTaskId as another (keeps oldest)
    * - Stale pending tasks: pending tasks that have not been started within the given age threshold
    */
   cleanupTasks(options: {
@@ -1276,11 +1252,11 @@ export class TaskOrchestratorService {
       }
     }
 
-    // Find duplicate tasks: same name, sessionId, parentTaskId (keep oldest createdAt)
+    // Find duplicate tasks: same name, parentTaskId (keep oldest createdAt)
     const seen = new Map<string, Task>();
     const sortedByAge = [...allTasks].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     for (const task of sortedByAge) {
-      const key = `${task.name.toLowerCase()}|${task.sessionId || '__no_session__'}|${task.parentTaskId || '__no_parent__'}`;
+      const key = `${task.name.toLowerCase()}|${task.parentTaskId || '__no_parent__'}`;
       if (seen.has(key)) {
         duplicateTasks++;
         if (deleteDuplicates) {
@@ -1966,20 +1942,17 @@ export class TaskOrchestratorService {
   }
 
   /**
-   * Get the dependency graph for a session or workflow
-   * @param sessionId - Optional session ID to filter by
+   * Get the dependency graph for a workflow
    * @param workflowId - Optional workflow ID to filter by
    * @returns Object with nodes (tasks) and edges (dependencies)
    */
-  getDependencyGraph(sessionId?: string, workflowId?: string): { nodes: Task[]; edges: { from: string; to: string; type: string }[] } {
+  getDependencyGraph(workflowId?: string): { nodes: Task[]; edges: { from: string; to: string; type: string }[] } {
     let tasks: Task[];
     
     if (workflowId) {
       const workflow = this.state.workflows.get(workflowId);
       if (!workflow) return { nodes: [], edges: [] };
       tasks = workflow.taskIds.map(id => this.state.tasks.get(id)).filter((t): t is Task => t !== undefined);
-    } else if (sessionId) {
-      tasks = Array.from(this.state.tasks.values()).filter(t => t.sessionId === sessionId);
     } else {
       tasks = Array.from(this.state.tasks.values());
     }
@@ -1996,12 +1969,11 @@ export class TaskOrchestratorService {
 
   /**
    * Export the dependency graph as a Mermaid diagram
-   * @param sessionId - Optional session ID to filter by
    * @param workflowId - Optional workflow ID to filter by
    * @returns Mermaid flowchart TD string
    */
-  exportMermaid(sessionId?: string, workflowId?: string): string {
-    const { nodes, edges } = this.getDependencyGraph(sessionId, workflowId);
+  exportMermaid(workflowId?: string): string {
+    const { nodes, edges } = this.getDependencyGraph(workflowId);
     
     let mermaid = 'flowchart TD\n';
     
@@ -2023,12 +1995,11 @@ export class TaskOrchestratorService {
 
   /**
    * Get blocked tasks with their blocking dependencies
-   * @param sessionId - Optional session ID to filter by
    * @param workflowId - Optional workflow ID to filter by
    * @returns Array of tasks with their blocking dependency IDs
    */
-  getBlockedTasks(sessionId?: string, workflowId?: string): { task: Task; blockingDeps: string[] }[] {
-    const { nodes } = this.getDependencyGraph(sessionId, workflowId);
+  getBlockedTasks(workflowId?: string): { task: Task; blockingDeps: string[] }[] {
+    const { nodes } = this.getDependencyGraph(workflowId);
     const blocked: { task: Task; blockingDeps: string[] }[] = [];
 
     for (const task of nodes) {

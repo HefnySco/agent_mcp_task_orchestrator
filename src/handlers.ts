@@ -7,15 +7,15 @@ import {
   TaskExecutionError
 } from './errors.js';
 import type { Task } from './types.js';
-import { 
-  CreateTaskSchema, 
+import {
+  CreateTaskSchema,
   CreateTasksSchema,
-  UpdateTaskSchema, 
+  UpdateTaskSchema,
   TaskIdSchema,
   CreateWorkflowSchema,
-  ExecuteTaskSchema,
+  CompleteTaskSchema,
   FailTaskSchema,
-  MarkInProgressSchema,
+  StartTaskSchema,
   ResetTaskSchema,
   RetryTaskSchema,
   CanExecuteSchema,
@@ -61,41 +61,9 @@ export async function handleCreateTasks(
   const normalizedTasks = validated.tasks.map(task => ({
     ...task,
     parentTaskId: task.parentTaskId ?? undefined,
-    sessionId: task.sessionId ?? undefined,
     description: task.description ?? undefined,
     deduplication: task.deduplication ?? undefined
   }));
-
-  // Determine the batch sessionId from top-level sessionId (not metadata) for logging
-  const sessionId = normalizedTasks[0]?.sessionId as string | undefined;
-
-  // Check for duplicate task names within each sessionId (pre-creation advisory warning)
-  const sessionIds = new Set<string>();
-  normalizedTasks.forEach(task => {
-    if (task.sessionId) {
-      sessionIds.add(task.sessionId as string);
-    }
-  });
-
-  sessionIds.forEach(sid => {
-    const existingTasks = service.getAllTasks();
-    const tasksInSession = existingTasks.filter(t => t.sessionId === sid);
-    const existingNames = new Set(tasksInSession.map(t => t.name.toLowerCase()));
-
-    const duplicateNames: string[] = [];
-    normalizedTasks.forEach(task => {
-      if (task.sessionId === sid && existingNames.has(task.name.toLowerCase())) {
-        duplicateNames.push(task.name);
-      }
-    });
-
-    if (duplicateNames.length > 0) {
-      logger.warn(`Duplicate task names detected in session ${sid}`, {
-        duplicates: duplicateNames,
-        sessionId: sid
-      });
-    }
-  });
 
   // Default to skip deduplication for MCP-created tasks to avoid duplicate hanging tasks.
   // Callers can override per-task with deduplication: 'none' or 'error'.
@@ -125,7 +93,7 @@ export async function handleCreateTasks(
     ]
   };
 
-  await logger.logToolRequest('create_tasks', args, result, { sessionId });
+  await logger.logToolRequest('create_tasks', args, result);
   return result;
 }
 
@@ -148,7 +116,6 @@ export async function handleUpdateTask(
   if (validated.priority !== undefined) updates.priority = validated.priority;
   if (validated.order !== undefined) updates.order = validated.order;
   if (validated.parentTaskId !== undefined) updates.parentTaskId = validated.parentTaskId ?? undefined;
-  if (validated.sessionId !== undefined) updates.sessionId = validated.sessionId ?? undefined;
   if (validated.metadata !== undefined) updates.metadata = validated.metadata;
 
   const task = service.updateTask(validated.id, updates);
@@ -289,9 +256,8 @@ export async function handleListTasks(
 
   let taskList = '';
 
-  // First list parent tasks (without sessionId)
-  const parentTasksWithoutSession = parentTasks.filter(t => !t.sessionId);
-  parentTasksWithoutSession.forEach(t => {
+  // List parent tasks
+  parentTasks.forEach(t => {
     const icon = t.status === 'completed' ? '✅' : '⚪';
     taskList += `${icon} ${t.name} (ID: ${t.id})\n`;
 
@@ -304,35 +270,6 @@ export async function handleListTasks(
       });
     }
   });
-
-  // Group unattached tasks by sessionId
-  const tasksWithSession = parentTasks.filter(t => t.sessionId);
-  if (tasksWithSession.length > 0) {
-    const sessionGroups = new Map<string, typeof tasksWithSession>();
-    tasksWithSession.forEach(t => {
-      if (!sessionGroups.has(t.sessionId!)) {
-        sessionGroups.set(t.sessionId!, []);
-      }
-      sessionGroups.get(t.sessionId!)!.push(t);
-    });
-
-    sessionGroups.forEach((sessionTasks, sessionId) => {
-      taskList += `\n[Unattached / Session: ${sessionId}]\n`;
-      sessionTasks.forEach(t => {
-        const icon = t.status === 'completed' ? '✅' : '⚪';
-        taskList += `${icon} ${t.name} (ID: ${t.id})\n`;
-
-        // List subtasks for this task
-        const subtasks = childTasks.filter(c => c.parentTaskId === t.id);
-        if (subtasks.length > 0) {
-          subtasks.forEach(st => {
-            const subIcon = st.status === 'completed' ? '✅' : '⚪';
-            taskList += `  ${subIcon} └─ ${st.name} (ID: ${st.id})\n`;
-          });
-        }
-      });
-    });
-  }
 
   // List orphaned tasks (children whose parent doesn't exist in current list)
   const orphanedTasks = childTasks.filter(c => !parentTasks.find(p => p.id === c.parentTaskId));
@@ -358,16 +295,16 @@ export async function handleListTasks(
 }
 
 /**
- * Execute task handler
+ * Complete task handler
  */
-export async function handleExecuteTask(
+export async function handleCompleteTask(
   context: HandlerContext,
   args: Record<string, unknown>
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const { service, logger } = context;
 
   // Validate input
-  const validated = ExecuteTaskSchema.parse(args);
+  const validated = CompleteTaskSchema.parse(args);
 
   // Check if task exists
   const task = service.getTask(validated.id);
@@ -438,7 +375,7 @@ export async function handleExecuteTask(
     ]
   };
 
-  await logger.logToolRequest('execute_task', args, result);
+  await logger.logToolRequest('complete_task', args, result);
   return result;
 }
 
@@ -517,16 +454,16 @@ export async function handleFailTask(
 }
 
 /**
- * Mark task in progress handler
+ * Start task handler
  */
-export async function handleMarkInProgress(
+export async function handleStartTask(
   context: HandlerContext,
   args: Record<string, unknown>
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const { service, logger } = context;
 
   // Validate input
-  const validated = MarkInProgressSchema.parse(args);
+  const validated = StartTaskSchema.parse(args);
 
   // Check if task can be executed first to provide better error messages
   const canExecute = service.canExecuteTask(validated.id);
@@ -559,7 +496,7 @@ export async function handleMarkInProgress(
     ]
   };
 
-  await logger.logToolRequest('mark_in_progress', args, result);
+  await logger.logToolRequest('start_task', args, result);
   return result;
 }
 
@@ -721,7 +658,7 @@ export async function handleGetWorkflow(
   const { service, logger } = context;
 
   // Validate input
-  const validated = WorkflowIdSchema.parse(args);
+  const validated = WorkflowIdSchema.parse(args.id);
 
   const workflow = service.getWorkflow(validated);
   
@@ -811,7 +748,7 @@ export async function handleDeleteWorkflow(
   const { service, logger } = context;
 
   // Validate input
-  const validated = WorkflowIdSchema.parse(args);
+  const validated = WorkflowIdSchema.parse(args.id);
 
   const deleted = service.deleteWorkflow(validated);
   
@@ -1019,7 +956,7 @@ export async function handleStartWorkflowExecution(
     content: [
       {
         type: 'text',
-        text: `🚀 Workflow execution started\n\n**Run ID:** ${result.runId}\n**Workflow ID:** ${validated.workflowId}\n**Ready Tasks:** ${result.readyTasks.length}\n**Ready Task Names:** ${result.readyTasks.map(t => t.name).join(', ')}\n\n**Next Steps:**\n1. Work on the ${result.readyTasks.length} ready task(s) listed above\n2. Call execute_task (or fail_task if work fails) for each completed task\n3. Call advance_workflow_run(runId: "${result.runId}") to progress the workflow\n4. Repeat steps 1-3 until the workflow completes\n\n**Important:** Use the runId "${result.runId}" for all subsequent advance_workflow_run calls.`
+        text: `🚀 Workflow execution started\n\n**Run ID:** ${result.runId}\n**Workflow ID:** ${validated.workflowId}\n**Ready Tasks:** ${result.readyTasks.length}\n**Ready Task Names:** ${result.readyTasks.map(t => t.name).join(', ')}\n\n**Next Steps:**\n1. Work on the ${result.readyTasks.length} ready task(s) listed above\n2. Call complete_task (or fail_task if work fails) for each completed task\n3. Call advance_workflow_run(runId: "${result.runId}") to progress the workflow\n4. Repeat steps 1-3 until the workflow completes\n\n**Important:** Use the runId "${result.runId}" for all subsequent advance_workflow_run calls.`
       }
     ]
   };
@@ -1086,7 +1023,7 @@ export async function handleAdvanceWorkflowRun(
   // Add actionable next steps
   if (result.workflowStatus === 'in_progress') {
     if (result.newlyReadyTasks.length > 0) {
-      output += `\n**Next Steps:**\n1. Work on the ${result.newlyReadyTasks.length} newly ready task(s) listed above\n2. Call execute_task (or fail_task if work fails) for each completed task\n3. Call advance_workflow_run(runId: "${result.run.id}") again to progress the workflow\n4. Repeat until the workflow completes\n`;
+      output += `\n**Next Steps:**\n1. Work on the ${result.newlyReadyTasks.length} newly ready task(s) listed above\n2. Call complete_task (or fail_task if work fails) for each completed task\n3. Call advance_workflow_run(runId: "${result.run.id}") again to progress the workflow\n4. Repeat until the workflow completes\n`;
     } else {
       output += `\n**Next Steps:**\nNo new tasks are ready yet. This may mean:\n- Some tasks are still in progress\n- Tasks are blocked by dependencies\n- Check blocked tasks list above for details\n\nContinue working on in-progress tasks, then call advance_workflow_run again.\n`;
     }
@@ -1334,7 +1271,7 @@ export async function handleGetDependencyGraph(
 
   const validated = GetDependencyGraphSchema.parse(args);
 
-  const graph = service.getDependencyGraph(validated.sessionId, validated.workflowId);
+  const graph = service.getDependencyGraph(validated.workflowId);
 
   const nodesText = graph.nodes.map(n => `  - ${n.name} (${n.id}) [${n.status}]`).join('\n');
   const edgesText = graph.edges.map(e => `  - ${e.from} → ${e.to} (${e.type})`).join('\n');
@@ -1363,7 +1300,7 @@ export async function handleExportMermaid(
 
   const validated = ExportMermaidSchema.parse(args);
 
-  const mermaid = service.exportMermaid(validated.sessionId, validated.workflowId);
+  const mermaid = service.exportMermaid(validated.workflowId);
 
   const result = {
     content: [
@@ -1389,7 +1326,7 @@ export async function handleGetBlockedTasks(
 
   const validated = GetBlockedTasksSchema.parse(args);
 
-  const blockedTasks = service.getBlockedTasks(validated.sessionId, validated.workflowId);
+  const blockedTasks = service.getBlockedTasks(validated.workflowId);
 
   const tasksText = blockedTasks.map(bt => {
     const depsText = bt.blockingDeps.map(d => `    - ${d}`).join('\n');
@@ -1450,9 +1387,9 @@ export const handlerRegistry: Record<string, (context: HandlerContext, args: Rec
   get_task: handleGetTask,
   get_subtasks: handleGetSubtasks,
   list_tasks: handleListTasks,
-  execute_task: handleExecuteTask,
+  complete_task: handleCompleteTask,
   fail_task: handleFailTask,
-  mark_in_progress: handleMarkInProgress,
+  start_task: handleStartTask,
   reset_task: handleResetTask,
   retry_task: handleRetryTask,
   get_next_tasks: handleGetNextTasks,

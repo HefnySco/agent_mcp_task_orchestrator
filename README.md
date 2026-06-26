@@ -48,12 +48,7 @@ LLMs excel at generating ideas but often struggle with:
 3. Subtasks can start immediately (no blocking on parent `in_progress`)
 4. Parent completes when subtasks are done
 
-### 3. Session Grouping
-Always include `sessionId` for related tasks:
-- `"feature-auth-2024"`
-- `"bugfix-payment-123"`
-
-### 4. Let the Orchestrator Handle Order
+### 3. Let the Orchestrator Handle Order
 You no longer need perfect sequencing — declare dependencies and let the server guide execution.
 
 ## Grok's Opinion
@@ -74,13 +69,13 @@ It effectively turns a single LLM call into a **persistent, stateful agent** cap
 
 ```json
 // 1. Create parent
-{ "name": "Build User Dashboard", "sessionId": "dashboard-2024" }
+{ "name": "Build User Dashboard" }
 
 // 2. Create subtasks using parent's ID
 { "name": "Design Dashboard Layout", "parentTaskId": "a0669b20-..." }
 
-// 3. Mark parent in_progress, then work on subtasks freely
-// 4. Complete subtasks → parent can be completed
+// 3. Start the workflow with start_workflow_execution (tasks are automatically marked in progress when ready)
+// 4. Work on ready tasks using complete_task / fail_task
 ```
 
 ## � Installation & Deployment
@@ -190,7 +185,6 @@ Create one or more tasks with optional dependencies and parent tasks.
   - `priority` (optional): Task priority (higher = more important, affects execution order)
   - `order` (optional): Order among siblings (for parent-child relationships)
   - `parentTaskId` (optional): Parent task ID for creating subtasks. **CRITICAL: Must be an actual existing task ID, NOT a positional reference.** Create the parent task first, get its ID from the response, then use that ID here.
-  - `sessionId` (optional): Session ID for grouping related tasks (top-level field, e.g., "feature-auth")
   - `metadata` (optional): Additional metadata for the task
   - `maxRetries` (optional): Maximum number of retry attempts for this task
   - `deduplication` (optional): How to handle duplicate tasks (skip, reuse, error, none)
@@ -233,11 +227,11 @@ List all tasks or filter by status.
 
 ### Task Execution
 
-### `execute_task`
-Mark a task as completed with a result.
+### `complete_task`
+Mark a task as completed and optionally provide a result. This is the main tool to use when you finish working on a task.
 
 **Parameters:**
-- `id` (required): The ID of the task to execute
+- `id` (required): The ID of the task to complete
 - `result` (optional): The result of the task execution
 
 ### `fail_task`
@@ -247,11 +241,11 @@ Mark a task as failed with an error message.
 - `id` (required): The ID of the task to fail
 - `error` (required): The error message
 
-### `mark_in_progress`
-Mark a task as in progress.
+### `start_task`
+Mark a task as in progress. Use this only when working with standalone tasks outside of workflows.
 
 **Parameters:**
-- `id` (required): The ID of the task to mark as in progress
+- `id` (required): The ID of the task to start
 
 ### `reset_task`
 Reset a task back to pending status.
@@ -364,24 +358,21 @@ Get tasks that are ready to execute within a specific workflow (dependency-aware
 ### Introspection Tools
 
 ### `get_dependency_graph`
-Get the dependency graph for a session or workflow. Returns nodes (tasks) and edges (dependencies).
+Get the dependency graph for a workflow. Returns nodes (tasks) and edges (dependencies).
 
 **Parameters:**
-- `sessionId` (optional): Session ID to filter by
 - `workflowId` (optional): Workflow ID to filter by
 
 ### `export_mermaid`
 Export the dependency graph as a Mermaid flowchart diagram.
 
 **Parameters:**
-- `sessionId` (optional): Session ID to filter by
 - `workflowId` (optional): Workflow ID to filter by
 
 ### `get_blocked_tasks`
 Get blocked tasks with their blocking dependencies.
 
 **Parameters:**
-- `sessionId` (optional): Session ID to filter by
 - `workflowId` (optional): Workflow ID to filter by
 
 ### `get_critical_path`
@@ -439,7 +430,7 @@ Or with rich dependency object:
 
 3. **Check which tasks can be executed:** (Use `get_next_tasks` tool)
 
-4. **Execute a task:**
+4. **Complete a task using complete_task:**
 ```json
 {
   "id": "task_1234567890_abc",
@@ -519,7 +510,6 @@ Or in your MCP client config:
 - `tool`: Name of the tool
 - `arguments`: Arguments passed to the tool
 - `result`: Result returned by the tool
-- `sessionId`: Session ID if available
 
 **LLM Response Logs** (for debugging LLM → Agent interactions):
 - `timestamp`: When the LLM response was logged
@@ -527,7 +517,6 @@ Or in your MCP client config:
 - `content`: Full text from LLM that suggested tool calls
 - `toolCalls`: Array of tool calls suggested by the LLM
 - `relatedTools`: List of tool names extracted from tool calls
-- `sessionId`: Session ID if available
 
 ### Logging LLM Responses for Debugging
 
@@ -552,8 +541,7 @@ const toolCalls = [
 // Log the LLM response before executing tools
 await server.logLLMResponse(
   llmMessage,
-  toolCalls,
-  { sessionId: "feature-auth" }
+  toolCalls
 );
 
 // Then proceed with tool execution...

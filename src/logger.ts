@@ -133,7 +133,6 @@ export class Logger {
     result: unknown,
     llmContext?: {
       llmMessage?: string;
-      sessionId?: string;
     }
   ): Promise<void> {
     const entry: LogEntry = {
@@ -141,12 +140,11 @@ export class Logger {
       type: 'tool_request',
       tool: toolName,
       arguments: args,
-      result,
-      sessionId: llmContext?.sessionId
+      result
     };
 
     await this.writeToFile(entry);
-    this.debug(`Tool executed: ${toolName}`, { args, result, sessionId: llmContext?.sessionId });
+    this.debug(`Tool executed: ${toolName}`, { args, result });
   }
 
   /**
@@ -162,8 +160,7 @@ export class Logger {
       type: 'llm_response',
       content: message,
       toolCalls,
-      relatedTools: toolCalls?.map((tc: any) => tc.function?.name).filter(Boolean),
-      sessionId: metadata?.sessionId as string | undefined
+      relatedTools: toolCalls?.map((tc: any) => tc.function?.name).filter(Boolean)
     };
 
     await this.writeToFile(entry);

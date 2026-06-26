@@ -1120,6 +1120,41 @@ for (const testCase of testCases) {
         
         await newStorageAdapter.close();
       });
+
+      it('should preserve all JSON-compatible fields on save/load', async () => {
+        const depTask = service.createTask({ name: 'Dependency Task' });
+        const task = service.createTask({
+          name: 'Full Task',
+          description: 'Task with all optional fields',
+          dependencies: [depTask.id],
+          softDependencies: [depTask.id],
+          dependencyTimeouts: { [depTask.id]: 5000 },
+          externalDependencies: [{ type: 'api', url: 'https://example.com/health', timeoutMs: 1000 }],
+          conditionalDependencies: [{ condition: 'true', taskId: depTask.id }],
+          metadata: { environment: 'test', tags: ['a', 'b'] },
+        });
+        service.executeTask(task.id, { outcome: 'success', details: [1, 2, 3] });
+        await service.save();
+
+        const newStorageAdapter = StorageFactory.createAdapter(testCase.backend, testCase.path);
+        await newStorageAdapter.initialize();
+        const newService = new TaskOrchestratorService(newStorageAdapter);
+        await newService.load();
+
+        const loadedTask = newService.getTask(task.id);
+        assert.ok(loadedTask);
+        assert.strictEqual(loadedTask?.name, 'Full Task');
+        assert.strictEqual(loadedTask?.description, 'Task with all optional fields');
+        assert.deepStrictEqual(loadedTask?.dependencies, [depTask.id]);
+        assert.deepStrictEqual(loadedTask?.softDependencies, [depTask.id]);
+        assert.deepStrictEqual(loadedTask?.dependencyTimeouts, { [depTask.id]: 5000 });
+        assert.deepStrictEqual(loadedTask?.externalDependencies, [{ type: 'api', url: 'https://example.com/health', timeoutMs: 1000 }]);
+        assert.deepStrictEqual(loadedTask?.conditionalDependencies, [{ condition: 'true', taskId: depTask.id }]);
+        assert.deepStrictEqual(loadedTask?.metadata, { environment: 'test', tags: ['a', 'b'] });
+        assert.deepStrictEqual(loadedTask?.result, { outcome: 'success', details: [1, 2, 3] });
+
+        await newStorageAdapter.close();
+      });
     });
 
     describe('subtasks', () => {

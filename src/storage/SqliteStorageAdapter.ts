@@ -48,6 +48,10 @@ export class SqliteStorageAdapter implements IStorageAdapter {
           description TEXT,
           status TEXT NOT NULL,
           dependencies TEXT,
+          soft_dependencies TEXT,
+          dependency_timeouts TEXT,
+          external_dependencies TEXT,
+          conditional_dependencies TEXT,
           parent_task_id TEXT,
           session_id TEXT,
           created_at TEXT NOT NULL,
@@ -113,18 +117,22 @@ export class SqliteStorageAdapter implements IStorageAdapter {
           description: row[2] as string || undefined,
           status: row[3] as Task['status'],
           dependencies: row[4] ? JSON.parse(row[4] as string) : [],
-          parentTaskId: row[5] as string || undefined,
-          sessionId: row[6] as string || undefined,
-          createdAt: row[7] as string,
-          updatedAt: row[8] as string,
-          startedAt: row[9] as string || undefined,
-          completedAt: row[10] as string || undefined,
-          retries: row[11] as number || 0,
-          maxRetries: row[12] as number || undefined,
-          timeoutMs: row[13] as number || undefined,
-          result: row[14] ? JSON.parse(row[14] as string) : undefined,
-          error: row[15] as string || undefined,
-          metadata: row[16] ? JSON.parse(row[16] as string) : undefined
+          softDependencies: row[5] ? JSON.parse(row[5] as string) : undefined,
+          dependencyTimeouts: row[6] ? JSON.parse(row[6] as string) : undefined,
+          externalDependencies: row[7] ? JSON.parse(row[7] as string) : undefined,
+          conditionalDependencies: row[8] ? JSON.parse(row[8] as string) : undefined,
+          parentTaskId: row[9] as string || undefined,
+          sessionId: row[10] as string || undefined,
+          createdAt: row[11] as string,
+          updatedAt: row[12] as string,
+          startedAt: row[13] as string || undefined,
+          completedAt: row[14] as string || undefined,
+          retries: row[15] as number || 0,
+          maxRetries: row[16] as number || undefined,
+          timeoutMs: row[17] as number || undefined,
+          result: row[18] ? JSON.parse(row[18] as string) : undefined,
+          error: row[19] as string || undefined,
+          metadata: row[20] ? JSON.parse(row[20] as string) : undefined
         };
         tasks.set(task.id, task);
       }
@@ -192,16 +200,21 @@ export class SqliteStorageAdapter implements IStorageAdapter {
       for (const task of state.tasks.values()) {
         this.db!.run(`
           INSERT INTO tasks (
-            id, name, description, status, dependencies, parent_task_id, session_id,
-            created_at, updated_at, started_at, completed_at, retries,
-            max_retries, timeout_ms, result, error, metadata
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, name, description, status, dependencies, soft_dependencies,
+            dependency_timeouts, external_dependencies, conditional_dependencies,
+            parent_task_id, session_id, created_at, updated_at, started_at,
+            completed_at, retries, max_retries, timeout_ms, result, error, metadata
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
           task.id,
           task.name,
           task.description || null,
           task.status,
           JSON.stringify(task.dependencies),
+          task.softDependencies ? JSON.stringify(task.softDependencies) : null,
+          task.dependencyTimeouts ? JSON.stringify(task.dependencyTimeouts) : null,
+          task.externalDependencies ? JSON.stringify(task.externalDependencies) : null,
+          task.conditionalDependencies ? JSON.stringify(task.conditionalDependencies) : null,
           task.parentTaskId || null,
           task.sessionId || null,
           task.createdAt,

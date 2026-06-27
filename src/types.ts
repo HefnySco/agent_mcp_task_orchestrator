@@ -127,6 +127,9 @@ export interface Workflow {
   taskIds: string[];
   createdAt: string;
   updatedAt: string;
+  version?: string;
+  tags?: string[];
+  templateDescription?: string;
 }
 
 /**
@@ -225,4 +228,17 @@ export interface LogEntry {
   content?: string;
   toolCalls?: any[];
   relatedTools?: string[];
+}
+
+/**
+ * Workflow bundle for export/import functionality
+ * Contains a complete workflow definition with all related tasks, subtasks, and dependencies
+ */
+export interface WorkflowBundle {
+  workflow: Workflow;
+  tasks: Task[];
+  version: string;
+  exportedAt: string;
+  templateName?: string;
+  tags?: string[];
 }

@@ -404,6 +404,105 @@ Get the critical path for a workflow (longest path of dependencies).
 **Parameters:**
 - `workflowId` (required): Workflow ID to analyze
 
+### Workflow Bundle Export/Import
+
+### `export_workflow_bundle`
+Export a workflow as a portable JSON bundle containing the workflow, all related tasks (including subtasks), dependencies, and metadata. The bundle can be saved and imported in a new session to recreate the workflow structure.
+
+**Parameters:**
+- `workflowId` (required): The ID of the workflow to export
+- `includeRuns` (optional): Whether to include workflow run history (default: false)
+
+**Returns:**
+- A JSON bundle containing:
+  - `workflow`: Workflow metadata (name, taskIds, version, tags, templateDescription)
+  - `tasks`: Array of all tasks in the workflow (including subtasks)
+  - `version`: Bundle version string
+  - `exportedAt`: ISO timestamp when bundle was exported
+  - `templateName`: Original workflow name
+  - `tags`: Optional tags from the workflow
+
+**Usage Example:**
+```json
+{
+  "workflowId": "workflow-123"
+}
+```
+
+**Best Practices:**
+- Export workflows as templates for reuse across projects
+- Save bundles to version control for workflow documentation
+- Use tags to categorize workflow templates
+- Export before major refactoring to preserve workflow structure
+
+### `import_workflow_bundle`
+Import a workflow bundle to create a new workflow. The bundle should be a JSON object containing workflow, tasks, and metadata. All task IDs are remapped during import to avoid conflicts. Supports name prefixing and deduplication strategies.
+
+**Parameters:**
+- `bundle` (required): The workflow bundle to import (JSON object with workflow, tasks, version, exportedAt, etc.)
+- `namePrefix` (optional): Prefix to add to all task and workflow names (useful for avoiding name conflicts)
+- `deduplication` (optional): Deduplication strategy for imported tasks (skip, reuse, error, none; default: none)
+
+**Returns:**
+- `newWorkflowId`: ID of the newly created workflow
+- `taskIdMap`: Mapping from original task IDs to new task IDs
+- Workflow name and task count
+
+**Usage Example:**
+```json
+{
+  "bundle": {
+    "workflow": {
+      "id": "original-workflow-id",
+      "name": "CI Pipeline",
+      "taskIds": ["task-1", "task-2"],
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "version": "1.0.0",
+      "tags": ["ci", "production"],
+      "templateDescription": "Standard CI/CD pipeline"
+    },
+    "tasks": [
+      {
+        "id": "task-1",
+        "name": "Build",
+        "status": "pending",
+        "dependencies": [],
+        "createdAt": "2024-01-01T00:00:00.000Z",
+        "updatedAt": "2024-01-01T00:00:00.000Z"
+      }
+    ],
+    "version": "1.0.0",
+    "exportedAt": "2024-01-01T00:00:00.000Z",
+    "templateName": "CI Pipeline",
+    "tags": ["ci", "production"]
+  },
+  "namePrefix": "Project A - ",
+  "deduplication": "none"
+}
+```
+
+**Best Practices:**
+- Use `namePrefix` when importing the same template multiple times to avoid name conflicts
+- Use `deduplication: "skip"` to avoid creating duplicate tasks if similar tasks already exist
+- Review the `taskIdMap` to understand how IDs were remapped
+- After import, use `start_workflow_execution` to begin executing the imported workflow
+- Save bundle files in a templates directory for easy reuse
+
+**Workflow Template Lifecycle:**
+1. **Export** a working workflow as a template using `export_workflow_bundle`
+2. **Save** the bundle JSON to a file or version control
+3. **Import** the bundle in a new session using `import_workflow_bundle`
+4. **Customize** with `namePrefix` and appropriate deduplication strategy
+5. **Execute** the imported workflow using `start_workflow_execution`
+
+**Common Use Cases:**
+- **Workflow Templates**: Create reusable workflow patterns (CI/CD, deployment, testing)
+- **Cross-Project Sharing**: Share workflows between different projects or teams
+- **Backup/Restore**: Save workflow state before major changes
+- **Documentation**: Use bundles as documentation of workflow structure
+- **Testing**: Import test workflows in isolated environments
+
 ### System
 
 ### `get_stats`

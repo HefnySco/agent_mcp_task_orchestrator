@@ -10,7 +10,9 @@ import type {
   Workflow,
   WorkflowRunStatus,
   RichDependency,
-  ReadinessScore
+  ReadinessScore,
+  WorkflowBundle,
+  DeduplicationStrategy
 } from './types.js';
 import {
   StorageError,
@@ -267,6 +269,7 @@ export class TaskOrchestratorService {
     const defaultDeduplication = options.defaultDeduplication || 'none';
     const resultTasks: Task[] = [];
     const idMapping = new Map<string, string>(); // Maps input index -> task ID (for positional deps)
+    const newTaskIds = new Set<string>(); // Track tasks created in this batch (excludes reused duplicates)
 
     // Helper: build a deduplication key from an input
     const dedupKey = (input: CreateTaskInput): string => {
@@ -337,6 +340,7 @@ export class TaskOrchestratorService {
       this.state.tasks.set(id, newTask);
       resultTasks.push(newTask);
       idMapping.set(String(i), id);
+      newTaskIds.add(id);
     }
 
     // Second pass: Resolve dependencies to actual task IDs
@@ -427,8 +431,13 @@ export class TaskOrchestratorService {
     }
 
     // Third pass: Check for circular dependencies in DAG
+    // Only validate tasks created in this batch; reused duplicates already had their deps validated
+    // at creation time and may reference tasks that were subsequently deleted.
     for (let i = 0; i < resultTasks.length; i++) {
       const task = resultTasks[i];
+      if (!newTaskIds.has(task.id)) {
+        continue;
+      }
       if (task.dependencies && task.dependencies.length > 0) {
         this.checkDependencyCycle(task.id, task.dependencies);
       }
@@ -2108,5 +2117,174 @@ export class TaskOrchestratorService {
     }
 
     return path;
+  }
+
+  /**
+   * Export a workflow as a portable JSON bundle
+   * @param workflowId - Workflow ID to export
+   * @param options - Export options
+   * @returns WorkflowBundle containing workflow and all related tasks
+   * @throws TaskNotFoundError if workflow doesn't exist
+   */
+  exportWorkflowBundle(workflowId: string, options: { includeRuns?: boolean } = {}): WorkflowBundle {
+    const workflow = this.state.workflows.get(workflowId);
+    if (!workflow) {
+      throw new TaskNotFoundError(workflowId);
+    }
+
+    // Recursively collect all tasks in the workflow (including subtasks)
+    const collectedTasks = new Set<string>();
+    const tasks: Task[] = [];
+
+    const collectTasksRecursive = (taskId: string) => {
+      if (collectedTasks.has(taskId)) return;
+      collectedTasks.add(taskId);
+
+      const task = this.state.tasks.get(taskId);
+      if (task) {
+        tasks.push(task);
+
+        // Collect subtasks recursively
+        const subtasks = this.getSubtasks(taskId);
+        for (const subtask of subtasks) {
+          collectTasksRecursive(subtask.id);
+        }
+      }
+    };
+
+    // Collect all tasks in the workflow
+    for (const taskId of workflow.taskIds) {
+      collectTasksRecursive(taskId);
+    }
+
+    // Normalize dependencies to ensure they're all RichDependency objects
+    const normalizedTasks = tasks.map(task => ({
+      ...task,
+      dependencies: this.normalizeDependencies(task.dependencies.map(dep => 
+        typeof dep === 'string' ? dep : dep.taskId
+      ))
+    }));
+
+    const bundle: WorkflowBundle = {
+      workflow: {
+        ...workflow,
+        // Clear ID for import (will be regenerated)
+        id: '',
+        // Keep taskIds for remapping during import
+        taskIds: workflow.taskIds
+      },
+      tasks: normalizedTasks,
+      version: '1.0.0',
+      exportedAt: new Date().toISOString(),
+      templateName: workflow.name,
+      tags: workflow.tags
+    };
+
+    return bundle;
+  }
+
+  /**
+   * Import a workflow bundle to create a new workflow
+   * @param bundle - WorkflowBundle to import
+   * @param options - Import options
+   * @returns Object with new workflow ID and task ID mapping
+   * @throws ValidationError if bundle is invalid
+   */
+  importWorkflowBundle(
+    bundle: WorkflowBundle,
+    options: { namePrefix?: string; deduplication?: DeduplicationStrategy } = {}
+  ): { newWorkflowId: string; taskIdMap: Record<string, string> } {
+    const { namePrefix = '', deduplication = 'none' } = options;
+
+    // Validate bundle structure
+    if (!bundle.workflow || !bundle.tasks || !bundle.version) {
+      throw new ValidationError('Invalid workflow bundle: missing required fields');
+    }
+
+    // Create ID mapping from old IDs to new IDs
+    const taskIdMap: Record<string, string> = {};
+    const newTasks: CreateTaskInput[] = [];
+
+    // First pass: Create task inputs with remapped parentTaskId
+    for (const task of bundle.tasks) {
+      const newTaskId = this.generateId();
+      taskIdMap[task.id] = newTaskId;
+
+      newTasks.push({
+        name: namePrefix + task.name,
+        description: task.description,
+        dependencies: task.dependencies.map(dep => ({
+          ...dep,
+          taskId: dep.taskId // Will be remapped in second pass
+        })),
+        priority: task.priority,
+        order: task.order,
+        parentTaskId: task.parentTaskId ? taskIdMap[task.parentTaskId] : undefined,
+        metadata: task.metadata,
+        maxRetries: task.maxRetries,
+        timeoutMs: task.timeoutMs,
+        deduplication
+      });
+    }
+
+    // Second pass: Remap dependency IDs
+    for (const taskInput of newTasks) {
+      if (taskInput.dependencies) {
+        taskInput.dependencies = taskInput.dependencies.map(dep => {
+          if (typeof dep === 'string') {
+            return dep;
+          }
+          const newDepTaskId = taskIdMap[dep.taskId];
+          if (!newDepTaskId) {
+            throw new ValidationError(`Dependency task ID ${dep.taskId} not found in bundle`);
+          }
+          return { ...dep, taskId: newDepTaskId };
+        });
+      }
+    }
+
+    // Create tasks using createTasks for proper dependency resolution
+    const createdTasks = this.createTasks(newTasks, { defaultDeduplication: deduplication });
+
+    // Build mapping from old IDs to new task IDs (handles deduplication)
+    const finalTaskIdMap: Record<string, string> = {};
+    for (let i = 0; i < bundle.tasks.length; i++) {
+      const oldId = bundle.tasks[i].id;
+      const newTask = createdTasks[i];
+      finalTaskIdMap[oldId] = newTask.id;
+    }
+
+    // Remap workflow task IDs
+    const newWorkflowTaskIds = bundle.workflow.taskIds.map(oldId => {
+      const newId = finalTaskIdMap[oldId];
+      if (!newId) {
+        throw new ValidationError(`Workflow task ID ${oldId} not found in imported tasks`);
+      }
+      return newId;
+    });
+
+    // Create the workflow
+    const workflowName = namePrefix + (bundle.templateName || bundle.workflow.name);
+    const newWorkflow = this.createWorkflow(workflowName, newWorkflowTaskIds);
+
+    // Update workflow with optional metadata from bundle
+    if (bundle.workflow.version || bundle.workflow.tags || bundle.workflow.templateDescription) {
+      const updatedWorkflow: Workflow = {
+        ...newWorkflow,
+        version: bundle.workflow.version,
+        tags: bundle.workflow.tags,
+        templateDescription: bundle.workflow.templateDescription
+      };
+      this.state.workflows.set(newWorkflow.id, updatedWorkflow);
+      this.triggerSave();
+    }
+
+    // Force save to ensure persistence
+    this.forceSave();
+
+    return {
+      newWorkflowId: newWorkflow.id,
+      taskIdMap: finalTaskIdMap
+    };
   }
 }

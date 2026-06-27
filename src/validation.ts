@@ -296,3 +296,55 @@ export const GetBlockedTasksSchema = z.object({
 export const GetCriticalPathSchema = z.object({
   workflowId: z.string().min(1, 'Workflow ID is required')
 });
+
+/**
+ * Zod schema for exporting workflow bundle
+ */
+export const ExportWorkflowBundleSchema = z.object({
+  workflowId: z.string().min(1, 'Workflow ID is required'),
+  includeRuns: z.boolean().optional()
+});
+
+/**
+ * Zod schema for importing workflow bundle
+ */
+export const ImportWorkflowBundleSchema = z.object({
+  bundle: z.object({
+    workflow: z.object({
+      id: z.string(),
+      name: z.string().min(1),
+      taskIds: z.array(z.string()),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+      version: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+      templateDescription: z.string().optional()
+    }).strict(),
+    tasks: z.array(z.object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      description: z.string().optional(),
+      status: TaskStatusSchema,
+      dependencies: z.array(RichDependencySchema),
+      priority: z.number().int().optional(),
+      order: z.number().int().optional(),
+      parentTaskId: z.string().optional(),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+      startedAt: z.string().optional(),
+      completedAt: z.string().optional(),
+      retries: z.number().int().optional(),
+      maxRetries: z.number().int().optional(),
+      timeoutMs: z.number().int().optional(),
+      result: z.unknown().optional(),
+      error: z.string().optional(),
+      metadata: z.record(z.string(), z.unknown()).optional()
+    })).min(1, 'At least one task is required'),
+    version: z.string().min(1, 'Bundle version is required'),
+    exportedAt: z.string(),
+    templateName: z.string().optional(),
+    tags: z.array(z.string()).optional()
+  }),
+  namePrefix: z.string().optional(),
+  deduplication: DeduplicationStrategySchema
+});

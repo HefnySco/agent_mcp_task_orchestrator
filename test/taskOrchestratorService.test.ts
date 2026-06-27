@@ -1758,6 +1758,210 @@ for (const testCase of testCases) {
           assert.ok(depGraph);
           assert.strictEqual(depGraph!.nodes.length, 3);
         });
+
+        describe('Workflow Bundle Export/Import', () => {
+          it('should export a simple workflow with basic tasks', () => {
+            const tasks = service.createTasks([
+              { name: 'Task 1' },
+              { name: 'Task 2' },
+              { name: 'Task 3' }
+            ]);
+
+            const workflow = service.createWorkflow('Test Workflow', tasks.map(t => t.id));
+            const bundle = service.exportWorkflowBundle(workflow.id);
+
+            assert.ok(bundle);
+            assert.strictEqual(bundle.workflow.name, 'Test Workflow');
+            assert.strictEqual(bundle.tasks.length, 3);
+            assert.strictEqual(bundle.version, '1.0.0');
+            assert.ok(bundle.exportedAt);
+            assert.strictEqual(bundle.templateName, 'Test Workflow');
+          });
+
+          it('should export a workflow with subtasks (hierarchical structure)', () => {
+            const parentTask = service.createTask({ name: 'Parent Task' });
+            const childTasks = service.createTasks([
+              { name: 'Child Task 1', parentTaskId: parentTask.id },
+              { name: 'Child Task 2', parentTaskId: parentTask.id }
+            ]);
+
+            const workflow = service.createWorkflow('Hierarchical Workflow', [parentTask.id, ...childTasks.map(t => t.id)]);
+            const bundle = service.exportWorkflowBundle(workflow.id);
+
+            assert.ok(bundle);
+            assert.strictEqual(bundle.tasks.length, 3); // Parent + 2 children
+            assert.ok(bundle.tasks.some(t => t.name === 'Parent Task'));
+            assert.ok(bundle.tasks.some(t => t.name === 'Child Task 1'));
+            assert.ok(bundle.tasks.some(t => t.name === 'Child Task 2'));
+          });
+
+          it('should export a workflow with rich dependencies', () => {
+            const tasks = service.createTasks([
+              { name: 'Task 1' },
+              { name: 'Task 2', dependencies: [{ taskId: 'task-1', type: 'hard', onFailure: 'block' }] },
+              { name: 'Task 3', dependencies: [{ taskId: 'task-1', type: 'soft' }] }
+            ]);
+
+            const workflow = service.createWorkflow('Complex Workflow', tasks.map(t => t.id));
+            const bundle = service.exportWorkflowBundle(workflow.id);
+
+            assert.ok(bundle);
+            assert.strictEqual(bundle.tasks.length, 3);
+            
+            const task2 = bundle.tasks.find(t => t.name === 'Task 2');
+            assert.ok(task2);
+            assert.ok(Array.isArray(task2?.dependencies));
+            assert.strictEqual(task2?.dependencies.length, 1);
+          });
+
+          it('should throw error when exporting non-existent workflow', () => {
+            assert.throws(() => {
+              service.exportWorkflowBundle('non-existent-workflow-id');
+            });
+          });
+
+          it('should import a basic workflow bundle', () => {
+            const originalTasks = service.createTasks([
+              { name: 'Original Task 1' },
+              { name: 'Original Task 2' }
+            ]);
+
+            const originalWorkflow = service.createWorkflow('Original Workflow', originalTasks.map(t => t.id));
+            const bundle = service.exportWorkflowBundle(originalWorkflow.id);
+
+            // Clear all to simulate fresh session
+            service.clearAll();
+
+            // Import the bundle
+            const importResult = service.importWorkflowBundle(bundle);
+
+            assert.ok(importResult);
+            assert.ok(importResult.newWorkflowId);
+            assert.ok(importResult.taskIdMap);
+            assert.strictEqual(Object.keys(importResult.taskIdMap).length, 2);
+
+            // Verify the new workflow exists
+            const newWorkflow = service.getWorkflow(importResult.newWorkflowId);
+            assert.ok(newWorkflow);
+            assert.strictEqual(newWorkflow?.name, 'Original Workflow');
+            assert.strictEqual(newWorkflow?.taskIds.length, 2);
+
+            // Verify tasks were created with new IDs
+            const allTasks = service.getAllTasks();
+            assert.strictEqual(allTasks.length, 2);
+          });
+
+          it('should import with namePrefix option', () => {
+            const originalTasks = service.createTasks([
+              { name: 'Task 1' },
+              { name: 'Task 2' }
+            ]);
+
+            const originalWorkflow = service.createWorkflow('My Workflow', originalTasks.map(t => t.id));
+            const bundle = service.exportWorkflowBundle(originalWorkflow.id);
+
+            service.clearAll();
+
+            const importResult = service.importWorkflowBundle(bundle, { namePrefix: 'Project A - ' });
+
+            const newWorkflow = service.getWorkflow(importResult.newWorkflowId);
+            assert.ok(newWorkflow);
+            assert.strictEqual(newWorkflow?.name, 'Project A - My Workflow');
+
+            const allTasks = service.getAllTasks();
+            assert.strictEqual(allTasks.length, 2);
+            assert.ok(allTasks.every(t => t.name.startsWith('Project A - ')));
+          });
+
+          it('should import with deduplication strategies', () => {
+            const originalTasks = service.createTasks([
+              { name: 'Task 1' },
+              { name: 'Task 2' }
+            ]);
+
+            const originalWorkflow = service.createWorkflow('Workflow', originalTasks.map(t => t.id));
+            const bundle = service.exportWorkflowBundle(originalWorkflow.id);
+
+            service.clearAll();
+
+            // Test with 'skip' deduplication
+            const importResult = service.importWorkflowBundle(bundle, { deduplication: 'skip' });
+            assert.ok(importResult);
+          });
+
+          it('should handle import/export roundtrip correctly', () => {
+            // Create a complex workflow with subtasks and dependencies
+            const parentTask = service.createTask({ name: 'Parent Task' });
+            const childTasks = service.createTasks([
+              { name: 'Child Task 1', parentTaskId: parentTask.id },
+              { name: 'Child Task 2', parentTaskId: parentTask.id, dependencies: ['task-1'] }
+            ]);
+
+            const originalWorkflow = service.createWorkflow('Complex Workflow', [parentTask.id, ...childTasks.map(t => t.id)]);
+            const originalTaskIds = [parentTask.id, ...childTasks.map(t => t.id)];
+
+            // Export
+            const bundle = service.exportWorkflowBundle(originalWorkflow.id);
+
+            // Clear and import
+            service.clearAll();
+            const importResult = service.importWorkflowBundle(bundle);
+
+            // Verify structure is preserved
+            const newWorkflow = service.getWorkflow(importResult.newWorkflowId);
+            assert.ok(newWorkflow);
+            assert.strictEqual(newWorkflow?.name, 'Complex Workflow');
+            assert.strictEqual(newWorkflow?.taskIds.length, 3);
+
+            // Verify hierarchy is preserved
+            const allTasks = service.getAllTasks();
+            const newParentTask = allTasks.find(t => t.name === 'Parent Task');
+            assert.ok(newParentTask);
+
+            const newChildTasks = allTasks.filter(t => t.parentTaskId === newParentTask?.id);
+            assert.strictEqual(newChildTasks.length, 2);
+          });
+
+          it('should throw error when importing invalid bundle', () => {
+            const invalidBundle = {
+              workflow: null,
+              tasks: [],
+              version: '1.0.0',
+              exportedAt: new Date().toISOString()
+            };
+
+            assert.throws(() => {
+              service.importWorkflowBundle(invalidBundle as any);
+            });
+          });
+
+          it('should remap all task IDs during import', () => {
+            const originalTasks = service.createTasks([
+              { name: 'Task 1' },
+              { name: 'Task 2', dependencies: ['task-1'] }
+            ]);
+
+            const originalWorkflow = service.createWorkflow('ID Remap Test', originalTasks.map(t => t.id));
+            const originalTaskIds = originalTasks.map(t => t.id);
+
+            const bundle = service.exportWorkflowBundle(originalWorkflow.id);
+            service.clearAll();
+
+            const importResult = service.importWorkflowBundle(bundle);
+
+            // All original IDs should be mapped to new IDs
+            for (const originalId of originalTaskIds) {
+              assert.ok(importResult.taskIdMap[originalId]);
+              assert.notStrictEqual(importResult.taskIdMap[originalId], originalId);
+            }
+
+            // New IDs should be different from original IDs
+            const newTaskIds = Object.values(importResult.taskIdMap);
+            for (const newId of newTaskIds) {
+              assert.ok(!originalTaskIds.includes(newId));
+            }
+          });
+        });
       });
     });
   });

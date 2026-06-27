@@ -778,6 +778,110 @@ class TaskOrchestratorMCPServer {
               },
               required: ['workflowId']
             }
+          },
+          {
+            name: 'export_workflow_bundle',
+            description: 'Export a workflow as a portable JSON bundle containing the workflow, all related tasks (including subtasks), dependencies, and metadata. The bundle can be saved and imported in a new session to recreate the workflow structure.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                workflowId: {
+                  type: 'string',
+                  description: 'The ID of the workflow to export'
+                },
+                includeRuns: {
+                  type: 'boolean',
+                  description: 'Whether to include workflow run history (optional)'
+                }
+              },
+              required: ['workflowId']
+            }
+          },
+          {
+            name: 'import_workflow_bundle',
+            description: 'Import a workflow bundle to create a new workflow. The bundle should be a JSON object containing workflow, tasks, and metadata. All task IDs are remapped during import to avoid conflicts. Supports name prefixing and deduplication strategies.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                bundle: {
+                  type: 'object',
+                  description: 'The workflow bundle to import (JSON object with workflow, tasks, version, exportedAt, etc.)',
+                  properties: {
+                    workflow: {
+                      type: 'object',
+                      description: 'Workflow metadata',
+                      properties: {
+                        id: { type: 'string' },
+                        name: { type: 'string' },
+                        taskIds: { type: 'array', items: { type: 'string' } },
+                        createdAt: { type: 'string' },
+                        updatedAt: { type: 'string' },
+                        version: { type: 'string' },
+                        tags: { type: 'array', items: { type: 'string' } },
+                        templateDescription: { type: 'string' }
+                      },
+                      required: ['id', 'name', 'taskIds', 'createdAt', 'updatedAt']
+                    },
+                    tasks: {
+                      type: 'array',
+                      description: 'Array of tasks in the workflow',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string' },
+                          name: { type: 'string' },
+                          description: { type: 'string' },
+                          status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'failed'] },
+                          dependencies: { type: 'array', items: { type: 'object' } },
+                          priority: { type: 'number' },
+                          order: { type: 'number' },
+                          parentTaskId: { type: 'string' },
+                          createdAt: { type: 'string' },
+                          updatedAt: { type: 'string' },
+                          startedAt: { type: 'string' },
+                          completedAt: { type: 'string' },
+                          retries: { type: 'number' },
+                          maxRetries: { type: 'number' },
+                          timeoutMs: { type: 'number' },
+                          result: {},
+                          error: { type: 'string' },
+                          metadata: { type: 'object' }
+                        },
+                        required: ['id', 'name', 'status', 'dependencies', 'createdAt', 'updatedAt']
+                      }
+                    },
+                    version: {
+                      type: 'string',
+                      description: 'Bundle version'
+                    },
+                    exportedAt: {
+                      type: 'string',
+                      description: 'ISO timestamp when bundle was exported'
+                    },
+                    templateName: {
+                      type: 'string',
+                      description: 'Optional template name'
+                    },
+                    tags: {
+                      type: 'array',
+                      items: { type: 'string' },
+                      description: 'Optional tags'
+                    }
+                  },
+                  required: ['workflow', 'tasks', 'version', 'exportedAt']
+                },
+                namePrefix: {
+                  type: 'string',
+                  description: 'Optional prefix to add to all task and workflow names'
+                },
+                deduplication: {
+                  type: 'string',
+                  enum: ['skip', 'reuse', 'error', 'none'],
+                  description: 'Deduplication strategy for imported tasks (default: none)'
+                }
+              },
+              required: ['bundle']
+            }
           }
         ]
       };

@@ -35,7 +35,9 @@ import {
   ExportMermaidSchema,
   ExportGraphImageSchema,
   GetBlockedTasksSchema,
-  GetCriticalPathSchema
+  GetCriticalPathSchema,
+  ExportWorkflowBundleSchema,
+  ImportWorkflowBundleSchema
 } from './validation.js';
 import { ERROR_MESSAGES } from './constants.js';
 
@@ -925,7 +927,7 @@ export async function handleGetVersion(
     content: [
       {
         type: 'text',
-        text: `🔧 Sequential MCP Server\n\n**Name:** sequential\n**Version:** 1.1.0\n**Description:** Sequential task execution MCP server with dependency management and workflow support\n**Features:** task_management, dependency_tracking, workflow_support, persistent_storage, execution_tracking, retry_logic, workflow_execution`
+        text: `🔧 Sequential MCP Server\n\n**Name:** sequential\n**Version:** 1.1.1\n**Description:** Sequential task execution MCP server with dependency management and workflow support\n**Features:** task_management, dependency_tracking, workflow_support, persistent_storage, execution_tracking, retry_logic, workflow_execution`
       }
     ]
   };
@@ -1436,6 +1438,65 @@ export async function handleGetCriticalPath(
 }
 
 /**
+ * Export workflow bundle handler
+ */
+export async function handleExportWorkflowBundle(
+  context: HandlerContext,
+  args: Record<string, unknown>
+): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const { service, logger } = context;
+
+  const validated = ExportWorkflowBundleSchema.parse(args);
+
+  const bundle = service.exportWorkflowBundle(validated.workflowId, {
+    includeRuns: validated.includeRuns
+  });
+
+  const result = {
+    content: [
+      {
+        type: 'text',
+        text: `📦 Workflow Bundle Exported Successfully\n\n**Workflow Name:** ${bundle.templateName || bundle.workflow.name}\n**Bundle Version:** ${bundle.version}\n**Exported At:** ${bundle.exportedAt}\n**Tasks Included:** ${bundle.tasks.length}\n**Tags:** ${bundle.tags?.join(', ') || 'None'}\n\n**Full Bundle (JSON):**\n\`\`\`json\n${JSON.stringify(bundle, null, 2)}\n\`\`\`\n\n**Usage:**\nSave this JSON to a file and use import_workflow_bundle to restore it in a new session.`
+      }
+    ]
+  };
+
+  await logger.logToolRequest('export_workflow_bundle', args, result);
+  return result;
+}
+
+/**
+ * Import workflow bundle handler
+ */
+export async function handleImportWorkflowBundle(
+  context: HandlerContext,
+  args: Record<string, unknown>
+): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const { service, logger } = context;
+
+  const validated = ImportWorkflowBundleSchema.parse(args);
+
+  const importResult = service.importWorkflowBundle(validated.bundle, {
+    namePrefix: validated.namePrefix,
+    deduplication: validated.deduplication
+  });
+
+  const workflow = service.getWorkflow(importResult.newWorkflowId);
+
+  const result = {
+    content: [
+      {
+        type: 'text',
+        text: `📦 Workflow Bundle Imported Successfully\n\n**New Workflow ID:** ${importResult.newWorkflowId}\n**Workflow Name:** ${workflow?.name || 'Unknown'}\n**Tasks Imported:** ${Object.keys(importResult.taskIdMap).length}\n**Name Prefix:** ${validated.namePrefix || 'None'}\n**Deduplication Strategy:** ${validated.deduplication || 'none'}\n\n**Task ID Mapping:**\n${Object.entries(importResult.taskIdMap).map(([oldId, newId]) => `  ${oldId} → ${newId}`).join('\n')}\n\n**Next Steps:**\n- Use start_workflow_execution to begin executing the imported workflow\n- Or use list_tasks to see all imported tasks`
+      }
+    ]
+  };
+
+  await logger.logToolRequest('import_workflow_bundle', args, result);
+  return result;
+}
+
+/**
  * Handler registry mapping tool names to their handlers
  */
 export const handlerRegistry: Record<string, (context: HandlerContext, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }>> = {
@@ -1475,5 +1536,7 @@ export const handlerRegistry: Record<string, (context: HandlerContext, args: Rec
   export_mermaid: handleExportMermaid,
   export_graph_image: handleExportGraphImage,
   get_blocked_tasks: handleGetBlockedTasks,
-  get_critical_path: handleGetCriticalPath
+  get_critical_path: handleGetCriticalPath,
+  export_workflow_bundle: handleExportWorkflowBundle,
+  import_workflow_bundle: handleImportWorkflowBundle
 };

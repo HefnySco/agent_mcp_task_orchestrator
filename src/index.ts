@@ -474,7 +474,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'advance_workflow_run',
-            description: 'Advance a workflow run by finding newly unlocked tasks after tasks are completed/failed. Returns detailed information including completed tasks, failed tasks, newly ready tasks, blocked tasks, workflow status, and a human-readable summary. Supports smart failure handling that only fails the workflow when no paths forward remain (unless continueOnFailure is enabled).\n\n**When to Use This Tool:**\n- Typically NOT needed - complete_task and fail_task auto-advance workflows by default\n- Use this if you disabled auto-advance (autoAdvance: false) in complete_task/fail_task\n- Use this for manual control over workflow progression\n- Use this to check workflow status without completing tasks\n\n**What the Response Tells You:**\n- Current workflow status (in_progress, completed, failed)\n- Which tasks just completed or failed\n- List of newly ready tasks you should work on next\n- Any blocked tasks waiting for dependencies\n- A human-readable summary of what happened\n\n**Important:** Always use the runId returned by start_workflow_execution for all subsequent calls to this tool.',
+            description: 'Advance a workflow run by finding newly unlocked tasks after tasks are completed/failed. Returns detailed information including completed tasks, failed tasks, newly ready tasks, blocked tasks, workflow status, and a human-readable summary. Supports smart failure handling that only fails the workflow when no paths forward remain (unless continueOnFailure is enabled).\n\n**When to Use This Tool:**\n- Typically NOT needed - complete_task and fail_task auto-advance workflows by default\n- Use this if you disabled auto-advance (autoAdvance: false) in complete_task/fail_task\n- Use this for manual control over workflow progression\n- Use this to check workflow status without completing tasks\n\n**What the Response Tells You:**\n- Current workflow status (in_progress, completed, failed)\n- Which tasks just completed or failed\n- List of newly ready tasks you should work on next\n- Any blocked tasks waiting for dependencies\n- A human-readable summary of what happened\n\n**Important:** Always use the runId returned by start_workflow_execution for all subsequent calls to this tool.\n\n**Response Format:** Returns a consistent JSON structure with `success`, `data`, `displayOutput`, `error`, and `metadata` fields. Always show the `displayOutput` field to the user for human-readable information.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -736,7 +736,7 @@ class TaskOrchestratorMCPServer {
           },
           {
             name: 'export_graph_image',
-            description: 'Export the dependency graph as a rendered image (PNG or SVG). This is a dedicated tool for image-only output.',
+            description: 'Export the dependency graph as a rendered image (PNG or SVG). This is a dedicated tool for image-only output. Returns `type: "image"` with the rendered image data.\n\n**Response Format:** Returns `type: "image"` with the rendered image data and a text message about the file save location.',
             inputSchema: {
               type: 'object',
               properties: {

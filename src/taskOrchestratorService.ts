@@ -155,7 +155,7 @@ export class TaskOrchestratorService {
    * as completed. Subtasks can start independently of their parent's status.
    */
   createTask(task: CreateTaskInput): Task {
-    const id = this.generateId();
+    const id = this.generateId(task.name);
     const now = new Date().toISOString();
     
     // Normalize dependencies to RichDependency array
@@ -195,6 +195,9 @@ export class TaskOrchestratorService {
       this.checkParentCycle(id, task.parentTaskId);
     }
     
+    // Validate parent-dependency consistency
+    this.validateParentDependencyConsistency(id, task.parentTaskId, resolvedDeps);
+    
     // Check for circular dependencies in the DAG
     if (resolvedDeps.length > 0) {
       this.checkDependencyCycle(id, resolvedDeps);
@@ -223,6 +226,32 @@ export class TaskOrchestratorService {
   }
 
   /**
+   * Build a batch name-to-ID mapping for dependency resolution
+   * @param inputs - Array of task creation inputs
+   * @param idMapping - Map of input index to task ID (for positional deps)
+   * @returns Map of task name (lowercase) to task ID
+   * 
+   * This helper is unit-testable and isolates the batch name resolution logic.
+   * It only includes tasks that were actually created (not deduplicated/skipped).
+   */
+  private buildBatchNameMap(
+    inputs: CreateTaskInput[],
+    idMapping: Map<string, string>
+  ): Map<string, string> {
+    const batchNameMap = new Map<string, string>();
+    
+    for (let i = 0; i < inputs.length; i++) {
+      const taskId = idMapping.get(String(i));
+      if (taskId) {
+        // Only include tasks that were actually created (not skipped due to deduplication)
+        batchNameMap.set(inputs[i].name.toLowerCase(), taskId);
+      }
+    }
+    
+    return batchNameMap;
+  }
+
+  /**
    * Create multiple tasks in batch
    * @param tasks - Array of task creation inputs
    * @param options - Optional batch-level options (default deduplication strategy, etc.)
@@ -231,20 +260,35 @@ export class TaskOrchestratorService {
    * @throws Error if circular dependency is detected or duplicate is found with 'error' strategy
    *
    * This method supports both positional dependencies within a single batch and references
-   * to existing task IDs:
-   * 1. First pass: Deduplicate against existing tasks and create new tasks without dependencies
-   * 2. Second pass: Resolve positional dependencies to actual task IDs, and validate existing IDs
-   * 3. Third pass: Auto-add parentTaskId to dependencies if provided
-   * 4. Fourth pass: Validate dependencies and check for circular references
+   * to existing task IDs. Dependency resolution precedence:
+   * 1. Batch name match (case-insensitive) - highest priority for same-batch references
+   * 2. Positional reference (task-N format)
+   * 3. Existing task ID (UUID)
+   * 4. Existing task name (case-insensitive) - for cross-session references
+   *
+   * The method is organized into three clear phases:
+   * Phase A (preparation): Handle deduplication, generate prospective IDs, populate idMapping
+   *                       and batchNameToId. No insertion into state.tasks yet.
+   * Phase B (resolution): Resolve all dependencies against batch map first, then existing state.
+   *                       Produce fully-populated resolvedDependencies arrays. Throw early on failure.
+   * Phase C (insert + validate): Construct complete Task objects with resolved deps, insert them,
+   *                             then run cycle detection and existence validation only on newly-created tasks.
    *
    * Supported dependency formats:
    * - Positional: "task-1", "task-2", etc. (1-based index in the current batch)
    * - Existing task IDs: UUIDs of tasks already in the system
+   * - Task names: Case-insensitive match within batch or existing tasks
    *
    * Positional dependency example:
    * [
    *   { name: "Task A" },
    *   { name: "Task B", dependencies: ["task-1"] }
+   * ]
+   *
+   * Name-based dependency example (same batch):
+   * [
+   *   { name: "Task A" },
+   *   { name: "Task B", dependencies: ["Task A"] }
    * ]
    *
    * Mixed dependency example:
@@ -288,7 +332,9 @@ export class TaskOrchestratorService {
       return undefined;
     };
 
-    // First pass: Deduplicate and create tasks without dependencies
+    // ========== PHASE A: PREPARATION ==========
+    // Handle deduplication decisions, generate prospective IDs, populate idMapping and batchNameToId.
+    // Do NOT insert into state.tasks yet.
     for (let i = 0; i < tasks.length; i++) {
       const taskInput = tasks[i];
 
@@ -316,14 +362,127 @@ export class TaskOrchestratorService {
         }
       }
 
-      const id = this.generateId();
-      const now = new Date().toISOString();
+      // Generate prospective ID for tasks that will be created
+      const id = this.generateId(taskInput.name);
+      idMapping.set(String(i), id);
+      newTaskIds.add(id);
+    }
+
+    // Build batch name-to-ID map for dependency resolution
+    const batchNameToId = this.buildBatchNameMap(tasks, idMapping);
+
+    // ========== PHASE B: RESOLUTION ==========
+    // Resolve all dependencies against batch map first, then existing state.
+    // Produce fully-populated resolvedDependencies arrays. Throw early on failure.
+    const resolvedDependenciesMap = new Map<string, RichDependency[]>(); // Maps input index -> resolved deps
+
+    for (let i = 0; i < tasks.length; i++) {
+      const taskInput = tasks[i];
+      
+      // Skip tasks that were deduplicated (not in newTaskIds)
+      if (!newTaskIds.has(idMapping.get(String(i))!)) {
+        continue;
+      }
+
+      if (!taskInput.dependencies || taskInput.dependencies.length === 0) {
+        resolvedDependenciesMap.set(String(i), []);
+        continue;
+      }
+
+      // Normalize dependencies to RichDependency array
+      const normalizedDeps = this.normalizeDependencies(taskInput.dependencies);
+      const resolvedDependencies: RichDependency[] = [];
+
+      for (const dep of normalizedDeps) {
+        const originalTaskId = dep.taskId; // Keep original for error messages
+        let resolvedTaskId: string;
+
+        // Resolution precedence:
+        // 1. Batch name match (case-insensitive) - highest priority for same-batch references
+        const batchMatchId = batchNameToId.get(originalTaskId.toLowerCase());
+        if (batchMatchId) {
+          resolvedTaskId = batchMatchId;
+        }
+        // 2. Positional reference (task-N format)
+        else if (originalTaskId.match(/^task-(\d+)$/)) {
+          const positionalMatch = originalTaskId.match(/^task-(\d+)$/);
+          if (positionalMatch) {
+            const index = parseInt(positionalMatch[1], 10) - 1; // Convert to 0-based index
+            if (index >= 0 && index < tasks.length) {
+              const mappedId = idMapping.get(String(index));
+              if (mappedId) {
+                resolvedTaskId = mappedId;
+              } else {
+                throw new DependencyNotFoundError(
+                  `Positional dependency '${originalTaskId}' references a task that was deduplicated and not created in this batch`
+                );
+              }
+            } else {
+              throw new DependencyNotFoundError(
+                `Positional dependency '${originalTaskId}' is out of range (valid range: task-1 to task-${tasks.length})`
+              );
+            }
+          } else {
+            throw new DependencyNotFoundError(
+              `Invalid positional dependency format: '${originalTaskId}'`
+            );
+          }
+        }
+        // 3. Existing task ID (UUID)
+        else if (this.state.tasks.has(originalTaskId)) {
+          resolvedTaskId = originalTaskId;
+        }
+        // 4. Existing task name (case-insensitive) - for cross-session references
+        else {
+          let existingNameMatch: Task | undefined;
+          for (const existingTask of this.state.tasks.values()) {
+            if (existingTask.name.toLowerCase() === originalTaskId.toLowerCase()) {
+              existingNameMatch = existingTask;
+              break;
+            }
+          }
+          if (existingNameMatch) {
+            resolvedTaskId = existingNameMatch.id;
+          } else {
+            throw new DependencyNotFoundError(
+              `Dependency '${originalTaskId}' could not be resolved. Use 'task-N' for a positional reference, an existing task ID, or a task name (in this batch or existing).`
+            );
+          }
+        }
+
+        // Add resolved dependency with original metadata
+        resolvedDependencies.push({ ...dep, taskId: resolvedTaskId });
+      }
+
+      resolvedDependenciesMap.set(String(i), resolvedDependencies);
+    }
+
+    // ========== PHASE C: INSERT + VALIDATE ==========
+    // Construct complete Task objects with resolved deps, insert them,
+    // then run cycle detection and existence validation only on newly-created tasks.
+    const now = new Date().toISOString();
+
+    for (let i = 0; i < tasks.length; i++) {
+      const taskInput = tasks[i];
+      const taskId = idMapping.get(String(i));
+
+      // Skip tasks that were deduplicated (not in newTaskIds)
+      if (!newTaskIds.has(taskId!)) {
+        // Add the reused duplicate task to results
+        const duplicate = findDuplicate(taskInput);
+        if (duplicate) {
+          resultTasks.push(duplicate);
+        }
+        continue;
+      }
+
+      const resolvedDeps = resolvedDependenciesMap.get(String(i)) || [];
 
       const newTask: Task = {
-        id,
+        id: taskId!,
         name: taskInput.name,
         description: taskInput.description,
-        dependencies: [], // Will be resolved in second pass
+        dependencies: resolvedDeps,
         priority: taskInput.priority,
         order: taskInput.order,
         parentTaskId: taskInput.parentTaskId,
@@ -336,113 +495,31 @@ export class TaskOrchestratorService {
         updatedAt: now
       };
 
-      // Store the task
-      this.state.tasks.set(id, newTask);
+      // Validate parent-dependency consistency before insertion
+      this.validateParentDependencyConsistency(taskId!, taskInput.parentTaskId, resolvedDeps);
+
+      // Insert the task into state
+      this.state.tasks.set(taskId!, newTask);
       resultTasks.push(newTask);
-      idMapping.set(String(i), id);
-      newTaskIds.add(id);
     }
 
-    // Second pass: Resolve dependencies to actual task IDs
-    // Supported formats:
-    // 1. Positional reference: "task-1", "task-2", etc. (1-based index in this batch)
-    // 2. Existing task ID (UUID already in state)
-    // 3. Task name within this batch (case-insensitive match)
-    // 4. Task name of an existing task in the system (case-insensitive match)
-    // 5. Full RichDependency object (with taskId as string or positional ref)
-    for (let i = 0; i < resultTasks.length; i++) {
-      const taskInput = tasks[i];
-      const task = resultTasks[i];
-
-      if (!taskInput.dependencies || taskInput.dependencies.length === 0) {
-        continue;
-      }
-
-      // Normalize dependencies to RichDependency array
-      const normalizedDeps = this.normalizeDependencies(taskInput.dependencies);
-      const resolvedDependencies: RichDependency[] = [];
-
-      for (const dep of normalizedDeps) {
-        const taskId = dep.taskId;
-        let resolvedTaskId: string;
-
-        // Check if dependency is a positional reference (task-N format)
-        const positionalMatch = taskId.match(/^task-(\d+)$/);
-        if (positionalMatch) {
-          const index = parseInt(positionalMatch[1], 10) - 1; // Convert to 0-based index
-          if (index >= 0 && index < tasks.length) {
-            const mappedId = idMapping.get(String(index));
-            if (mappedId) {
-              resolvedTaskId = mappedId;
-            } else {
-              throw new DependencyNotFoundError(
-                `Positional dependency '${taskId}' references a task that was deduplicated and not created in this batch`
-              );
-            }
-          } else {
-            // Out of range positional index
-            throw new DependencyNotFoundError(
-              `Positional dependency '${taskId}' is out of range (valid range: task-1 to task-${tasks.length})`
-            );
-          }
-        } else if (this.state.tasks.has(taskId)) {
-          // Existing task ID reference
-          resolvedTaskId = taskId;
-        } else {
-          // Try matching by task name within this batch (case-insensitive)
-          const batchMatchIndex = tasks.findIndex(
-            t => t.name.toLowerCase() === taskId.toLowerCase()
-          );
-          if (batchMatchIndex !== -1) {
-            const mappedId = idMapping.get(String(batchMatchIndex));
-            if (mappedId) {
-              resolvedTaskId = mappedId;
-            } else {
-              throw new DependencyNotFoundError(
-                `Dependency '${taskId}' could not be resolved in batch`
-              );
-            }
-          } else {
-            // Try matching by task name among existing tasks in the system (case-insensitive)
-            let existingNameMatch: Task | undefined;
-            for (const existingTask of this.state.tasks.values()) {
-              if (existingTask.name.toLowerCase() === taskId.toLowerCase()) {
-                existingNameMatch = existingTask;
-                break;
-              }
-            }
-            if (existingNameMatch) {
-              resolvedTaskId = existingNameMatch.id;
-            } else {
-              throw new DependencyNotFoundError(
-                `Dependency '${taskId}' could not be resolved. Use 'task-N' for a positional reference, an existing task ID, or a task name (in this batch or existing).`
-              );
-            }
-          }
-        }
-
-        // Add resolved dependency with original metadata
-        resolvedDependencies.push({ ...dep, taskId: resolvedTaskId });
-      }
-
-      // Update task with resolved dependencies
-      task.dependencies = resolvedDependencies;
-      this.state.tasks.set(task.id, task);
-    }
-
-    // Third pass: Check for circular dependencies in DAG
+    // Validate dependencies and check for circular references
     // Only validate tasks created in this batch; reused duplicates already had their deps validated
     // at creation time and may reference tasks that were subsequently deleted.
-    for (let i = 0; i < resultTasks.length; i++) {
-      const task = resultTasks[i];
+    for (const task of resultTasks) {
       if (!newTaskIds.has(task.id)) {
         continue;
       }
+
+      // We still call checkDependencyCycle even though tasks are pre-inserted for two reasons:
+      // 1. Consistency with the single-task createTask path which also uses this helper
+      // 2. The helper is now safe to handle both "task not yet inserted" and "task already inserted" scenarios
+      //    thanks to the save/restore logic added to checkDependencyCycle
       if (task.dependencies && task.dependencies.length > 0) {
         this.checkDependencyCycle(task.id, task.dependencies);
       }
 
-      // Validate all dependency IDs exist in state (defensive)
+      // Validate all dependency IDs exist in state (defensive - should be almost unreachable if Phase B is strict)
       for (const dep of task.dependencies) {
         if (!this.state.tasks.has(dep.taskId)) {
           throw new DependencyNotFoundError(dep.taskId);
@@ -459,6 +536,14 @@ export class TaskOrchestratorService {
    * @param taskId - The new task ID being created
    * @param dependencies - Dependencies of the new task
    * @throws Error if circular dependency is detected with full path
+   * 
+   * This method safely handles both scenarios:
+   * 1. Task not yet inserted in state.tasks (single task creation path)
+   * 2. Task already inserted in state.tasks (batch creation path)
+   * 
+   * For scenario 2, we save the original task, perform the cycle check with a temp task,
+   * then restore the original task to avoid deleting real task entries that downstream
+   * logic may rely on.
    */
   private checkDependencyCycle(taskId: string, dependencies: RichDependency[]): void {
     const visited = new Set<string>();
@@ -490,9 +575,11 @@ export class TaskOrchestratorService {
       return false;
     };
 
-    // Task not in state yet (single task creation scenario)
-    // Use temporary task to check for cycles
     const now = new Date().toISOString();
+    
+    // Save original task if it exists (batch path scenario)
+    const originalTask = this.state.tasks.get(taskId);
+    
     for (const dep of dependencies) {
       visited.clear();
       recursionStack.clear();
@@ -510,8 +597,12 @@ export class TaskOrchestratorService {
 
       const hasCycleFromDep = hasCycle(dep.taskId);
 
-      // Remove the temporary task
-      this.state.tasks.delete(taskId);
+      // Restore original task if it existed, otherwise delete the temp task
+      if (originalTask) {
+        this.state.tasks.set(taskId, originalTask);
+      } else {
+        this.state.tasks.delete(taskId);
+      }
 
       if (hasCycleFromDep) {
         throw new Error(`Circular dependency detected: ${path.join(' → ')}`);
@@ -556,6 +647,62 @@ export class TaskOrchestratorService {
   }
 
   /**
+   * Check if a task is an ancestor of another task
+   * @param ancestorId - Potential ancestor task ID
+   * @param descendantId - Potential descendant task ID
+   * @returns True if ancestorId is an ancestor of descendantId
+   */
+  private isAncestor(ancestorId: string, descendantId: string): boolean {
+    let current = this.state.tasks.get(descendantId);
+    while (current?.parentTaskId) {
+      if (current.parentTaskId === ancestorId) return true;
+      current = this.state.tasks.get(current.parentTaskId);
+    }
+    return false;
+  }
+
+  /**
+   * Validates that a task with a parentTaskId does not have dependencies
+   * that would create illogical execution order (e.g. depending on something
+   * that runs after its parent).
+   * @param taskId - The task ID being validated
+   * @param parentTaskId - The parent task ID (if any)
+   * @param dependencies - The task's dependencies
+   * @throws ValidationError if invalid parent-dependency combination is detected
+   */
+  private validateParentDependencyConsistency(
+    taskId: string,
+    parentTaskId: string | undefined,
+    dependencies: RichDependency[]
+  ): void {
+    if (!parentTaskId || dependencies.length === 0) {
+      return;
+    }
+
+    const parentTask = this.state.tasks.get(parentTaskId);
+    if (!parentTask) {
+      return; // Parent validation already happens elsewhere
+    }
+
+    for (const dep of dependencies) {
+      const depTask = this.state.tasks.get(dep.taskId);
+      if (!depTask) continue;
+
+      const isSameParent = depTask.parentTaskId === parentTaskId;
+      const isAncestorOfParent = this.isAncestor(parentTaskId, dep.taskId);
+      const isTopLevel = !depTask.parentTaskId;
+
+      if (!isSameParent && !isAncestorOfParent && !isTopLevel) {
+        throw new ValidationError(
+          `Invalid hierarchy: Task '${taskId}' is a child of '${parentTaskId}', ` +
+          `but depends on '${dep.taskId}' which is not under the same parent ` +
+          `and is not an ancestor of the parent. This creates an illogical execution order.`
+        );
+      }
+    }
+  }
+
+  /**
    * Update an existing task
    * @param id - Task ID
    * @param updates - Partial task updates
@@ -564,6 +711,12 @@ export class TaskOrchestratorService {
   updateTask(id: string, updates: UpdateTaskInput): Task | null {
     const task = this.state.tasks.get(id);
     if (!task) return null;
+    
+    // Validate parent-dependency consistency if parentTaskId or dependencies are being updated
+    const newParentTaskId = updates.parentTaskId !== undefined ? updates.parentTaskId : task.parentTaskId;
+    const newDependencies = updates.dependencies !== undefined ? updates.dependencies : task.dependencies;
+    
+    this.validateParentDependencyConsistency(id, newParentTaskId, newDependencies);
     
     const updatedTask: Task = {
       ...task,
@@ -623,7 +776,7 @@ export class TaskOrchestratorService {
    * @returns The created workflow
    */
   createWorkflow(name: string, taskIds: string[]): Workflow {
-    const workflowId = this.generateId();
+    const workflowId = this.generateId(name);
     const now = new Date().toISOString();
     
     const workflow: Workflow = {
@@ -1312,11 +1465,29 @@ export class TaskOrchestratorService {
   }
 
   /**
-   * Generate a unique ID using UUID
-   * @returns Unique ID string
-   */
-  private generateId(): string {
-    return uuidv4();
+   * Generate a unique ID.
+   * If a name/tag is provided, create a readable ID in the format:
+   *   slugified-name + short-uuid
+   * Otherwise return a pure UUID.
+ */
+  private generateId(nameOrTag?: string | null): string {
+    const uuid = uuidv4();
+
+    if (!nameOrTag) {
+      return uuid;
+    }
+
+    // Create a clean slug from the name
+    const slug = nameOrTag
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')     // replace non-alphanumeric with dash
+      .replace(/^-+|-+$/g, '')         // trim leading/trailing dashes
+      .substring(0, 50);               // limit length
+
+    // Take last 8 characters of UUID for uniqueness
+    const shortUuid = uuid.split('-').pop()?.substring(0, 8) || uuid.substring(0, 8);
+
+    return `${slug}-${shortUuid}`;
   }
 
   /**
@@ -1940,6 +2111,9 @@ export class TaskOrchestratorService {
       this.checkParentCycle(taskId, newParentTaskId);
     }
 
+    // Validate parent-dependency consistency with the new parent
+    this.validateParentDependencyConsistency(taskId, newParentTaskId || undefined, task.dependencies);
+
     task.parentTaskId = newParentTaskId || undefined;
     if (position !== undefined) {
       task.order = position;
@@ -1986,10 +2160,18 @@ export class TaskOrchestratorService {
     
     let mermaid = 'flowchart TD\n';
     
+    // Add CSS class definitions for status-based colors
+    mermaid += '  classDef green fill:#90EE90,stroke:#4CAF50,stroke-width:2px,color:#000\n';
+    mermaid += '  classDef red fill:#FFB6C1,stroke:#F44336,stroke-width:2px,color:#000\n';
+    mermaid += '  classDef blue fill:#87CEEB,stroke:#2196F3,stroke-width:2px,color:#000\n';
+    mermaid += '  classDef gray fill:#E0E0E0,stroke:#9E9E9E,stroke-width:2px,color:#000\n';
+    
     // Add nodes
     for (const node of nodes) {
       const label = node.name.replace(/"/g, '\\"');
-      const statusColor = node.status === 'completed' ? 'green' : node.status === 'failed' ? 'red' : 'gray';
+      const statusColor = node.status === 'completed' ? 'green' : 
+                          node.status === 'failed' ? 'red' : 
+                          node.status === 'in_progress' ? 'blue' : 'gray';
       mermaid += `  ${node.id}["${label}"]:::${statusColor}\n`;
     }
     
@@ -2146,12 +2328,10 @@ export class TaskOrchestratorService {
    * @throws ValidationError if identifier cannot be resolved
    */
   private resolveTaskId(identifier: string, bundle: WorkflowBundle): string {
-    // If it's a UUID format, try direct ID lookup first
-    if (identifier.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-      const task = bundle.tasks.find(t => t.id === identifier);
-      if (task) {
-        return identifier;
-      }
+    // Try direct ID lookup first (handles both UUIDs and slug-based IDs)
+    const taskById = bundle.tasks.find(t => t.id === identifier);
+    if (taskById) {
+      return identifier;
     }
 
     // Try name resolution using nameToIdMap
@@ -2274,48 +2454,51 @@ export class TaskOrchestratorService {
       throw new ValidationError('Invalid workflow bundle: missing required fields');
     }
 
-    // Create ID mapping from old IDs to new IDs
+    // Create ID mapping from old IDs to new IDs and positional index mapping
     const taskIdMap: Record<string, string> = {};
+    const taskIndexMap: Record<string, number> = {}; // old ID -> index in bundle
     const newTasks: CreateTaskInput[] = [];
 
-    // First pass: Generate new IDs for all tasks
-    for (const task of bundle.tasks) {
-      const newTaskId = this.generateId();
+    // First pass: Generate new IDs for all tasks and build index map
+    for (let i = 0; i < bundle.tasks.length; i++) {
+      const task = bundle.tasks[i];
+      const newTaskId = this.generateId(task.name);
       taskIdMap[task.id] = newTaskId;
+      taskIndexMap[task.id] = i;
     }
 
-    // Second pass: Create task inputs with remapped dependencies (skip parentTaskId for now)
+    // Second pass: Create task inputs with remapped dependencies using positional references
     for (const task of bundle.tasks) {
       // Apply name remapping if provided
       const taskName = nameRemapping[task.id] || namePrefix + task.name;
 
-      // Remap dependencies
+      // Remap dependencies to positional references
       const remappedDependencies = task.dependencies.map(dep => {
         if (typeof dep === 'string') {
-          // Try to resolve string identifier (could be name or ID)
+          // Try to resolve string identifier to old ID, then to positional reference
           try {
             const resolvedId = this.resolveTaskId(dep, bundle);
-            const mappedId = taskIdMap[resolvedId];
-            if (mappedId) {
-              return mappedId;
+            const index = taskIndexMap[resolvedId];
+            if (index !== undefined) {
+              return `task-${index + 1}`; // Positional references are 1-based
             }
           } catch {
             // If resolution fails, try direct ID lookup
-            const mappedId = taskIdMap[dep];
-            if (mappedId) {
-              return mappedId;
+            const index = taskIndexMap[dep];
+            if (index !== undefined) {
+              return `task-${index + 1}`;
             }
           }
-          // If all else fails, keep as-is (might be positional reference)
+          // If all else fails, keep as-is (might be positional reference already)
           return dep;
         }
-        // Resolve RichDependency taskId (could be name or ID)
+        // Resolve RichDependency taskId to positional reference
         const newDepTaskId = this.resolveTaskId(dep.taskId, bundle);
-        const mappedId = taskIdMap[newDepTaskId];
-        if (!mappedId) {
+        const index = taskIndexMap[newDepTaskId];
+        if (index === undefined) {
           throw new ValidationError(`Dependency task ID ${dep.taskId} not found in bundle`);
         }
-        return { ...dep, taskId: mappedId };
+        return { ...dep, taskId: `task-${index + 1}` };
       });
 
       newTasks.push({

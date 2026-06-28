@@ -272,7 +272,8 @@ export const GetDependencyGraphSchema = z.object({
  */
 export const ExportMermaidSchema = z.object({
   workflowId: z.string().optional(),
-  format: z.enum(['mmd', 'png', 'svg']).default('png')
+  format: z.enum(['mmd', 'png', 'svg']).default('mmd'),
+  filename: z.string().optional()
 });
 
 /**
@@ -280,7 +281,8 @@ export const ExportMermaidSchema = z.object({
  */
 export const ExportGraphImageSchema = z.object({
   workflowId: z.string().optional(),
-  format: z.enum(['png', 'svg']).default('png')
+  format: z.enum(['png', 'svg']).default('png'),
+  filename: z.string().optional()
 });
 
 /**

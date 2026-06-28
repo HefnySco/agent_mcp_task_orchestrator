@@ -8,6 +8,9 @@ import {
 } from './errors.js';
 import type { Task } from './types.js';
 import { renderMermaid } from './utils/mermaidRenderer.js';
+import { createSuccessResponse, createErrorResponse } from './utils/response.js';
+import fs from 'fs/promises';
+import path from 'path';
 import {
   CreateTaskSchema,
   CreateTasksSchema,
@@ -88,14 +91,17 @@ export async function handleCreateTasks(
     return `- **${task.name}** (ID: ${task.id})${parentInfo}`;
   }).join('\n');
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `✅ ${tasks.length} task(s) created successfully\n\n${taskSummaries}`
-      }
-    ]
+  const displayOutput = `✅ ${tasks.length} task(s) created successfully\n\n${taskSummaries}`;
+  const data = {
+    tasks: tasks.map(task => ({
+      id: task.id,
+      name: task.name,
+      status: task.status,
+      parentTaskId: task.parentTaskId
+    }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'create_tasks');
 
   await logger.logToolRequest('create_tasks', args, result);
   return result;
@@ -140,14 +146,18 @@ export async function handleUpdateTask(
     }
   }
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `✅ Task updated successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}${parentInfo}\n**Updated:** ${task.updatedAt}`
-      }
-    ]
+  const displayOutput = `✅ Task updated successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}${parentInfo}\n**Updated:** ${task.updatedAt}`;
+  const data = {
+    task: {
+      id: task.id,
+      name: task.name,
+      status: task.status,
+      parentTaskId: task.parentTaskId,
+      updatedAt: task.updatedAt
+    }
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'update_task');
 
   await logger.logToolRequest('update_task', args, result);
   return result;
@@ -173,14 +183,10 @@ export async function handleDeleteTask(
 
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `✅ Task deleted successfully\n\n**Deleted Task ID:** ${validated}`
-      }
-    ]
-  };
+  const displayOutput = `✅ Task deleted successfully\n\n**Deleted Task ID:** ${validated}`;
+  const data = { deletedTaskId: validated };
+
+  const result = createSuccessResponse(data, displayOutput, 'delete_task');
 
   await logger.logToolRequest('delete_task', args, result);
   return result;
@@ -221,14 +227,20 @@ export async function handleGetTask(
     subtaskInfo = `\n**Subtasks (${subtasks.length}):**\n${subtasks.map(st => `  - ${st.name} (${st.status})`).join('\n')}`;
   }
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📋 Task Details\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}${parentInfo}${subtaskInfo}\n**Created:** ${task.createdAt}\n**Updated:** ${task.updatedAt}`
-      }
-    ]
+  const displayOutput = `📋 Task Details\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}${parentInfo}${subtaskInfo}\n**Created:** ${task.createdAt}\n**Updated:** ${task.updatedAt}`;
+  const data = {
+    task: {
+      id: task.id,
+      name: task.name,
+      status: task.status,
+      parentTaskId: task.parentTaskId,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      subtasks: subtasks.map(st => ({ id: st.id, name: st.name, status: st.status }))
+    }
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_task');
 
   await logger.logToolRequest('get_task', args, result);
   return result;
@@ -285,14 +297,20 @@ export async function handleListTasks(
     });
   }
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `${completedCount}/${tasks.length} tasks done\n\n${taskList}`
-      }
-    ]
+  const displayOutput = `${completedCount}/${tasks.length} tasks done\n\n${taskList}`;
+  const data = {
+    totalTasks: tasks.length,
+    completedCount,
+    status,
+    tasks: tasks.map(t => ({
+      id: t.id,
+      name: t.name,
+      status: t.status,
+      parentTaskId: t.parentTaskId
+    }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'list_tasks');
 
   await logger.logToolRequest('list_tasks', args, result);
   return result;
@@ -327,6 +345,7 @@ export async function handleCompleteTask(
 
   // Check if task is in an active workflow and auto-advance is enabled
   let workflowInfo = '';
+  let workflowData: any = null;
   if (validated.autoAdvance !== false) {
     const runId = service.findActiveWorkflowRunForTask(validated.id);
     if (runId) {
@@ -358,6 +377,13 @@ export async function handleCompleteTask(
           workflowInfo += `\n❌ Workflow failed.`;
         }
         
+        workflowData = {
+          runId,
+          workflowStatus: advanceResult.workflowStatus,
+          newlyReadyTasks: advanceResult.newlyReadyTasks.map(t => ({ id: t.id, name: t.name })),
+          failedTasks: advanceResult.failedTasks.map(t => ({ id: t.id, name: t.name, error: t.error }))
+        };
+        
         await service.forceSave();
       }
     }
@@ -370,14 +396,17 @@ export async function handleCompleteTask(
   }
   resultText += workflowInfo;
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: resultText
-      }
-    ]
+  const data = {
+    task: {
+      id: executedTask.id,
+      name: executedTask.name,
+      status: executedTask.status,
+      completedAt: executedTask.completedAt
+    },
+    workflow: workflowData
   };
+
+  const result = createSuccessResponse(data, resultText, 'complete_task');
 
   await logger.logToolRequest('complete_task', args, result);
   return result;
@@ -405,6 +434,7 @@ export async function handleFailTask(
 
   // Check if task is in an active workflow and auto-advance is enabled
   let workflowInfo = '';
+  let workflowData: any = null;
   if (validated.autoAdvance !== false) {
     const runId = service.findActiveWorkflowRunForTask(validated.id);
     if (runId) {
@@ -436,6 +466,13 @@ export async function handleFailTask(
           workflowInfo += `\n❌ Workflow failed.`;
         }
         
+        workflowData = {
+          runId,
+          workflowStatus: advanceResult.workflowStatus,
+          newlyReadyTasks: advanceResult.newlyReadyTasks.map(t => ({ id: t.id, name: t.name })),
+          failedTasks: advanceResult.failedTasks.map(t => ({ id: t.id, name: t.name, error: t.error }))
+        };
+        
         await service.forceSave();
       }
     }
@@ -444,14 +481,18 @@ export async function handleFailTask(
   let resultText = `❌ Task marked as failed\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Error:** ${task.error}\n**Failed At:** ${task.completedAt}`;
   resultText += workflowInfo;
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: resultText
-      }
-    ]
+  const data = {
+    task: {
+      id: task.id,
+      name: task.name,
+      status: task.status,
+      error: task.error,
+      completedAt: task.completedAt
+    },
+    workflow: workflowData
   };
+
+  const result = createSuccessResponse(data, resultText, 'fail_task');
 
   await logger.logToolRequest('fail_task', args, result);
   return result;
@@ -483,22 +524,17 @@ export async function handleStartTask(
 
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify({
-          success: true,
-          task: {
-            id: task.id,
-            name: task.name,
-            status: task.status,
-            startedAt: task.startedAt
-          }
-        }, null, 2)
-      }
-    ]
+  const displayOutput = `✅ Task started successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}\n**Started At:** ${task.startedAt}`;
+  const data = {
+    task: {
+      id: task.id,
+      name: task.name,
+      status: task.status,
+      startedAt: task.startedAt
+    }
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'start_task');
 
   await logger.logToolRequest('start_task', args, result);
   return result;
@@ -524,14 +560,17 @@ export async function handleResetTask(
 
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `🔄 Task reset successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}\n**Reset At:** ${task.updatedAt}`
-      }
-    ]
+  const displayOutput = `🔄 Task reset successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Status:** ${task.status}\n**Reset At:** ${task.updatedAt}`;
+  const data = {
+    task: {
+      id: task.id,
+      name: task.name,
+      status: task.status,
+      updatedAt: task.updatedAt
+    }
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'reset_task');
 
   await logger.logToolRequest('reset_task', args, result);
   return result;
@@ -557,14 +596,18 @@ export async function handleRetryTask(
 
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `🔄 Task retried successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Retry Count:** ${task.retries}/${task.maxRetries || '∞'}\n**Status:** ${task.status}`
-      }
-    ]
+  const displayOutput = `🔄 Task retried successfully\n\n**Name:** ${task.name}\n**ID:** ${task.id}\n**Retry Count:** ${task.retries}/${task.maxRetries || '∞'}\n**Status:** ${task.status}`;
+  const data = {
+    task: {
+      id: task.id,
+      name: task.name,
+      status: task.status,
+      retries: task.retries,
+      maxRetries: task.maxRetries
+    }
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'retry_task');
 
   await logger.logToolRequest('retry_task', args, result);
   return result;
@@ -581,16 +624,15 @@ export async function handleGetNextTasks(
 
   const tasks = service.getNextExecutableTasks();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📋 Ready to Execute - ${tasks.length} tasks\n\n${tasks.length > 0 
-          ? tasks.map(t => `- **${t.name}** (ID: ${t.id})`).join('\n')
-          : 'No tasks ready to execute'}`
-      }
-    ]
+  const displayOutput = `📋 Ready to Execute - ${tasks.length} tasks\n\n${tasks.length > 0 
+    ? tasks.map(t => `- **${t.name}** (ID: ${t.id})`).join('\n')
+    : 'No tasks ready to execute'}`;
+  const data = {
+    count: tasks.length,
+    tasks: tasks.map(t => ({ id: t.id, name: t.name, status: t.status }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_next_tasks');
 
   await logger.logToolRequest('get_next_tasks', args, result);
   return result;
@@ -610,14 +652,16 @@ export async function handleCanExecute(
 
   const check = service.canExecuteTask(validated.id);
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `${check.canExecute ? '✅' : '❌'} Task ${check.canExecute ? 'can' : 'cannot'} be executed\n\n**Task ID:** ${validated.id}\n**Can Execute:** ${check.canExecute}\n${check.reason ? `**Reason:** ${check.reason}` : ''}`
-      }
-    ]
+  const displayOutput = `${check.canExecute ? '✅' : '❌'} Task ${check.canExecute ? 'can' : 'cannot'} be executed\n\n**Task ID:** ${validated.id}\n**Can Execute:** ${check.canExecute}\n${check.reason ? `**Reason:** ${check.reason}` : ''}`;
+  const data = {
+    taskId: validated.id,
+    canExecute: check.canExecute,
+    reason: check.reason,
+    readinessScore: check.readinessScore,
+    readinessBreakdown: check.readinessBreakdown
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'can_execute');
 
   await logger.logToolRequest('can_execute', args, result);
   return result;
@@ -639,14 +683,16 @@ export async function handleCreateWorkflow(
   
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `✅ Workflow created successfully\n\n**Name:** ${validated.name}\n**Workflow ID:** ${workflow.id}\n**Tasks:** ${validated.taskIds.length}\n**Task IDs:** ${validated.taskIds.join(', ')}`
-      }
-    ]
+  const displayOutput = `✅ Workflow created successfully\n\n**Name:** ${validated.name}\n**Workflow ID:** ${workflow.id}\n**Tasks:** ${validated.taskIds.length}\n**Task IDs:** ${validated.taskIds.join(', ')}`;
+  const data = {
+    workflow: {
+      id: workflow.id,
+      name: validated.name,
+      taskIds: validated.taskIds
+    }
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'create_workflow');
 
   await logger.logToolRequest('create_workflow', args, result);
   return result;
@@ -672,16 +718,21 @@ export async function handleGetWorkflow(
 
   const tasks = workflow.taskIds.map(taskId => service.getTask(taskId)).filter((t): t is Task => t !== undefined);
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📋 Workflow Details\n\n**Workflow ID:** ${validated}\n**Name:** ${workflow.name}\n**Tasks:** ${workflow.taskIds.length}\n**Task IDs:** ${workflow.taskIds.join(', ')}\n\n${tasks.length > 0 
-          ? '**Tasks in workflow:\n' + tasks.map(t => `- **${t.name}** (${t.status})`).join('\n')
-          : 'No tasks found'}`
-      }
-    ]
+  const displayOutput = `📋 Workflow Details\n\n**Workflow ID:** ${validated}\n**Name:** ${workflow.name}\n**Tasks:** ${workflow.taskIds.length}\n**Task IDs:** ${workflow.taskIds.join(', ')}\n\n${tasks.length > 0 
+    ? '**Tasks in workflow:\n' + tasks.map(t => `- **${t.name}** (${t.status})`).join('\n')
+    : 'No tasks found'}`;
+  const data = {
+    workflow: {
+      id: validated,
+      name: workflow.name,
+      taskIds: workflow.taskIds,
+      createdAt: workflow.createdAt,
+      updatedAt: workflow.updatedAt
+    },
+    tasks: tasks.map(t => ({ id: t.id, name: t.name, status: t.status }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_workflow');
 
   await logger.logToolRequest('get_workflow', args, result);
   return result;
@@ -701,16 +752,16 @@ export async function handleGetSubtasks(
 
   const subtasks = service.getSubtasks(validated);
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📋 Subtasks for ${validated} - ${subtasks.length} subtasks\n\n${subtasks.length > 0 
-          ? subtasks.map(t => `- **${t.name}** (${t.status}) - ID: ${t.id}`).join('\n')
-          : 'No subtasks found'}`
-      }
-    ]
+  const displayOutput = `📋 Subtasks for ${validated} - ${subtasks.length} subtasks\n\n${subtasks.length > 0 
+    ? subtasks.map(t => `- **${t.name}** (${t.status}) - ID: ${t.id}`).join('\n')
+    : 'No subtasks found'}`;
+  const data = {
+    parentTaskId: validated,
+    count: subtasks.length,
+    subtasks: subtasks.map(t => ({ id: t.id, name: t.name, status: t.status }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_subtasks');
 
   await logger.logToolRequest('get_subtasks', args, result);
   return result;
@@ -727,16 +778,19 @@ export async function handleListWorkflows(
 
   const workflows = service.getAllWorkflows();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📋 All Workflows - ${Object.keys(workflows).length} workflows\n\n${Object.entries(workflows).map(([id, workflow]) => 
-          `- **Workflow ID:** ${id}\n  **Name:** ${(workflow as any).name}\n  **Tasks:** ${(workflow as any).taskIds.length}`
-        ).join('\n')}`
-      }
-    ]
+  const displayOutput = `📋 All Workflows - ${Object.keys(workflows).length} workflows\n\n${Object.entries(workflows).map(([id, workflow]) => 
+    `- **Workflow ID:** ${id}\n  **Name:** ${(workflow as any).name}\n  **Tasks:** ${(workflow as any).taskIds.length}`
+  ).join('\n')}`;
+  const data = {
+    count: Object.keys(workflows).length,
+    workflows: Object.entries(workflows).map(([id, workflow]) => ({
+      id,
+      name: (workflow as any).name,
+      taskIds: (workflow as any).taskIds
+    }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'list_workflows');
 
   await logger.logToolRequest('list_workflows', args, result);
   return result;
@@ -762,14 +816,10 @@ export async function handleDeleteWorkflow(
 
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `✅ Workflow deleted successfully\n\n**Deleted Workflow ID:** ${validated}`
-      }
-    ]
-  };
+  const displayOutput = `✅ Workflow deleted successfully\n\n**Deleted Workflow ID:** ${validated}`;
+  const data = { deletedWorkflowId: validated };
+
+  const result = createSuccessResponse(data, displayOutput, 'delete_workflow');
 
   await logger.logToolRequest('delete_workflow', args, result);
   return result;
@@ -811,14 +861,10 @@ export async function handleClearAll(
   await service.clearAll();
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: '🗑️ All tasks and workflows cleared'
-      }
-    ]
-  };
+  const displayOutput = '🗑️ All tasks and workflows cleared';
+  const data = { cleared: true };
+
+  const result = createSuccessResponse(data, displayOutput, 'clear_all');
 
   await logger.logToolRequest('clear_all', args, result);
   return result;
@@ -835,14 +881,10 @@ export async function handleSaveState(
 
   await service.save();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: '💾 State saved successfully'
-      }
-    ]
-  };
+  const displayOutput = '💾 State saved successfully';
+  const data = { saved: true };
+
+  const result = createSuccessResponse(data, displayOutput, 'save_state');
 
   await logger.logToolRequest('save_state', args, result);
   return result;
@@ -864,14 +906,14 @@ export async function handleCleanupWorkflowRuns(
     maxCount: validated.maxCount
   });
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `🧹 Cleaned up ${deletedCount} workflow run(s)\n\n**Max Age:** ${validated.maxAgeMs ? `${validated.maxAgeMs}ms` : 'N/A'}\n**Max Count:** ${validated.maxCount || 'N/A'}\n**Deleted:** ${deletedCount}`
-      }
-    ]
+  const displayOutput = `🧹 Cleaned up ${deletedCount} workflow run(s)\n\n**Max Age:** ${validated.maxAgeMs ? `${validated.maxAgeMs}ms` : 'N/A'}\n**Max Count:** ${validated.maxCount || 'N/A'}\n**Deleted:** ${deletedCount}`;
+  const data = {
+    deletedCount,
+    maxAgeMs: validated.maxAgeMs,
+    maxCount: validated.maxCount
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'cleanup_workflow_runs');
 
   await logger.logToolRequest('cleanup_workflow_runs', args, result);
   return result;
@@ -901,14 +943,17 @@ export async function handleCleanupTasks(
     detailsText = `\n\n**Deleted Tasks (${cleanupResult.details.length}):**\n${cleanupResult.details.map(d => `  - ${d.name} (ID: ${d.id}) - ${d.reason}`).join('\n')}`;
   }
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `🧹 Task cleanup complete\n\n**Deleted:** ${cleanupResult.deleted}\n**Orphaned subtasks found:** ${cleanupResult.orphanedSubtasks}\n**Parent-completed subtasks found:** ${cleanupResult.parentCompleted}\n**Duplicate tasks found:** ${cleanupResult.duplicateTasks}\n**Stale pending tasks found:** ${cleanupResult.stalePendingTasks}${detailsText}`
-      }
-    ]
+  const displayOutput = `🧹 Task cleanup complete\n\n**Deleted:** ${cleanupResult.deleted}\n**Orphaned subtasks found:** ${cleanupResult.orphanedSubtasks}\n**Parent-completed subtasks found:** ${cleanupResult.parentCompleted}\n**Duplicate tasks found:** ${cleanupResult.duplicateTasks}\n**Stale pending tasks found:** ${cleanupResult.stalePendingTasks}${detailsText}`;
+  const data = {
+    deleted: cleanupResult.deleted,
+    orphanedSubtasks: cleanupResult.orphanedSubtasks,
+    parentCompleted: cleanupResult.parentCompleted,
+    duplicateTasks: cleanupResult.duplicateTasks,
+    stalePendingTasks: cleanupResult.stalePendingTasks,
+    details: cleanupResult.details
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'cleanup_tasks');
 
   await logger.logToolRequest('cleanup_tasks', args, result);
   return result;
@@ -923,14 +968,15 @@ export async function handleGetVersion(
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const { logger } = context;
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `🔧 Sequential MCP Server\n\n**Name:** sequential\n**Version:** 1.1.1\n**Description:** Sequential task execution MCP server with dependency management and workflow support\n**Features:** task_management, dependency_tracking, workflow_support, persistent_storage, execution_tracking, retry_logic, workflow_execution`
-      }
-    ]
+  const displayOutput = `🔧 Sequential MCP Server\n\n**Name:** sequential\n**Version:** 1.1.1\n**Description:** Sequential task execution MCP server with dependency management and workflow support\n**Features:** task_management, dependency_tracking, workflow_support, persistent_storage, execution_tracking, retry_logic, workflow_execution`;
+  const data = {
+    name: 'sequential',
+    version: '1.1.1',
+    description: 'Sequential task execution MCP server with dependency management and workflow support',
+    features: ['task_management', 'dependency_tracking', 'workflow_support', 'persistent_storage', 'execution_tracking', 'retry_logic', 'workflow_execution']
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_version');
 
   await logger.logToolRequest('get_version', args, result);
   return result;
@@ -956,14 +1002,15 @@ export async function handleStartWorkflowExecution(
 
   await service.forceSave();
 
-  const response = {
-    content: [
-      {
-        type: 'text',
-        text: `🚀 Workflow execution started\n\n**Run ID:** ${result.runId}\n**Workflow ID:** ${validated.workflowId}\n**Ready Tasks:** ${result.readyTasks.length}\n**Ready Task Names:** ${result.readyTasks.map(t => t.name).join(', ')}\n\n**Next Steps:**\n1. Work on the ${result.readyTasks.length} ready task(s) listed above\n2. Call complete_task (or fail_task if work fails) for each completed task\n3. Call advance_workflow_run(runId: "${result.runId}") to progress the workflow\n4. Repeat steps 1-3 until the workflow completes\n\n**Important:** Use the runId "${result.runId}" for all subsequent advance_workflow_run calls.`
-      }
-    ]
+  const displayOutput = `🚀 Workflow execution started\n\n**Run ID:** ${result.runId}\n**Workflow ID:** ${validated.workflowId}\n**Ready Tasks:** ${result.readyTasks.length}\n**Ready Task Names:** ${result.readyTasks.map(t => t.name).join(', ')}\n\n**Next Steps:**\n1. Work on the ${result.readyTasks.length} ready task(s) listed above\n2. Call complete_task (or fail_task if work fails) for each completed task\n3. Call advance_workflow_run(runId: "${result.runId}") to progress the workflow\n4. Repeat steps 1-3 until the workflow completes\n\n**Important:** Use the runId "${result.runId}" for all subsequent advance_workflow_run calls.`;
+
+  const data = {
+    runId: result.runId,
+    workflowId: validated.workflowId,
+    readyTasks: result.readyTasks.map(t => ({ id: t.id, name: t.name }))
   };
+
+  const response = createSuccessResponse(data, displayOutput, 'start_workflow_execution');
 
   await logger.logToolRequest('start_workflow_execution', args, response);
   return response;
@@ -1037,14 +1084,17 @@ export async function handleAdvanceWorkflowRun(
     output += `\n❌ Workflow failed. See failed tasks above for details.\n`;
   }
 
-  const response = {
-    content: [
-      {
-        type: 'text',
-        text: output
-      }
-    ]
+  const data = {
+    runId: result.run.id,
+    workflowStatus: result.workflowStatus,
+    summary: result.message,
+    completedTasks: result.completedTasks.map(t => ({ id: t.id, name: t.name })),
+    failedTasks: result.failedTasks.map(t => ({ id: t.id, name: t.name, error: t.error })),
+    newlyReadyTasks: result.newlyReadyTasks.map(t => ({ id: t.id, name: t.name })),
+    blockedTasks: result.blockedTasks.map(t => ({ id: t.id, name: t.name, status: t.status }))
   };
+
+  const response = createSuccessResponse(data, output, 'advance_workflow_run');
 
   await logger.logToolRequest('advance_workflow_run', args, response);
   return response;
@@ -1068,14 +1118,22 @@ export async function handleGetWorkflowRun(
     throw new WorkflowNotFoundError(validated.runId);
   }
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📋 Workflow Run Details\n\n**Run ID:** ${run.id}\n**Workflow ID:** ${run.workflowId}\n**Status:** ${run.status}\n**Completed Tasks:** ${run.completedTaskIds.length}\n**Active Tasks:** ${run.activeTaskIds.length}\n**Blocked Tasks:** ${run.blockedTaskIds.length}\n**Started:** ${run.startedAt}\n${run.completedAt ? `**Completed:** ${run.completedAt}` : ''}\n${run.error ? `**Error:** ${run.error}` : ''}`
-      }
-    ]
+  const displayOutput = `📋 Workflow Run Details\n\n**Run ID:** ${run.id}\n**Workflow ID:** ${run.workflowId}\n**Status:** ${run.status}\n**Completed Tasks:** ${run.completedTaskIds.length}\n**Active Tasks:** ${run.activeTaskIds.length}\n**Blocked Tasks:** ${run.blockedTaskIds.length}\n**Started:** ${run.startedAt}\n${run.completedAt ? `**Completed:** ${run.completedAt}` : ''}\n${run.error ? `**Error:** ${run.error}` : ''}`;
+  const data = {
+    run: {
+      id: run.id,
+      workflowId: run.workflowId,
+      status: run.status,
+      completedTaskIds: run.completedTaskIds,
+      activeTaskIds: run.activeTaskIds,
+      blockedTaskIds: run.blockedTaskIds,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+      error: run.error
+    }
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_workflow_run');
 
   await logger.logToolRequest('get_workflow_run', args, result);
   return result;
@@ -1092,16 +1150,21 @@ export async function handleListWorkflowRuns(
 
   const runs = service.getAllWorkflowRuns();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📋 All Workflow Runs - ${runs.length} runs\n\n${runs.map(r => 
-          `- **Run ID:** ${r.id} (${r.status}) - Workflow: ${r.workflowId}`
-        ).join('\n')}`
-      }
-    ]
+  const displayOutput = `📋 All Workflow Runs - ${runs.length} runs\n\n${runs.map(r => 
+    `- **Run ID:** ${r.id} (${r.status}) - Workflow: ${r.workflowId}`
+  ).join('\n')}`;
+  const data = {
+    count: runs.length,
+    runs: runs.map(r => ({
+      id: r.id,
+      workflowId: r.workflowId,
+      status: r.status,
+      startedAt: r.startedAt,
+      completedAt: r.completedAt
+    }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'list_workflow_runs');
 
   await logger.logToolRequest('list_workflow_runs', args, result);
   return result;
@@ -1121,16 +1184,16 @@ export async function handleGetNextWorkflowTasks(
 
   const tasks = service.getNextWorkflowTasks(validated.workflowId);
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📋 Ready Tasks in Workflow - ${tasks.length} tasks\n\n**Workflow ID:** ${validated.workflowId}\n**Ready Tasks:** ${tasks.length}\n**Ready Task Names:** ${tasks.map(t => t.name).join(', ')}\n\n${tasks.length > 0 
-          ? '**Tasks:\n' + tasks.map(t => `- **${t.name}** (ID: ${t.id})`).join('\n')
-          : 'No tasks ready to execute'}`
-      }
-    ]
+  const displayOutput = `📋 Ready Tasks in Workflow - ${tasks.length} tasks\n\n**Workflow ID:** ${validated.workflowId}\n**Ready Tasks:** ${tasks.length}\n**Ready Task Names:** ${tasks.map(t => t.name).join(', ')}\n\n${tasks.length > 0 
+    ? '**Tasks:\n' + tasks.map(t => `- **${t.name}** (ID: ${t.id})`).join('\n')
+    : 'No tasks ready to execute'}`;
+  const data = {
+    workflowId: validated.workflowId,
+    count: tasks.length,
+    tasks: tasks.map(t => ({ id: t.id, name: t.name, status: t.status }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_next_workflow_tasks');
 
   await logger.logToolRequest('get_next_workflow_tasks', args, result);
   return result;
@@ -1155,14 +1218,14 @@ export async function handleAddDependency(
 
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `✅ Dependency added successfully\n\n**Task ID:** ${validated.taskId}\n**Task Name:** ${task.name}\n**Dependencies:** ${task.dependencies.length}`
-      }
-    ]
+  const displayOutput = `✅ Dependency added successfully\n\n**Task ID:** ${validated.taskId}\n**Task Name:** ${task.name}\n**Dependencies:** ${task.dependencies.length}`;
+  const data = {
+    taskId: validated.taskId,
+    taskName: task.name,
+    dependencyCount: task.dependencies.length
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'add_dependency');
 
   await logger.logToolRequest('add_dependency', args, result);
   return result;
@@ -1219,14 +1282,15 @@ export async function handleUpdateDependency(
 
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `✅ Dependency updated successfully\n\n**Task ID:** ${validated.taskId}\n**Task Name:** ${task.name}\n**Updated Dependency:** ${validated.depTaskId}`
-      }
-    ]
+  const displayOutput = `✅ Dependency updated successfully\n\n**Task ID:** ${validated.taskId}\n**Task Name:** ${task.name}\n**Updated Dependency:** ${validated.depTaskId}`;
+  const data = {
+    taskId: validated.taskId,
+    taskName: task.name,
+    updatedDependencyId: validated.depTaskId,
+    updates: validated.updates
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'update_dependency');
 
   await logger.logToolRequest('update_dependency', args, result);
   return result;
@@ -1251,14 +1315,15 @@ export async function handleMoveTask(
 
   await service.forceSave();
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `✅ Task moved successfully\n\n**Task ID:** ${validated.taskId}\n**Task Name:** ${task.name}\n**New Parent:** ${validated.newParentTaskId || 'None'}\n**Position:** ${validated.position ?? 'Default'}`
-      }
-    ]
+  const displayOutput = `✅ Task moved successfully\n\n**Task ID:** ${validated.taskId}\n**Task Name:** ${task.name}\n**New Parent:** ${validated.newParentTaskId || 'None'}\n**Position:** ${validated.position ?? 'Default'}`;
+  const data = {
+    taskId: validated.taskId,
+    taskName: task.name,
+    newParentTaskId: validated.newParentTaskId,
+    position: validated.position
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'move_task');
 
   await logger.logToolRequest('move_task', args, result);
   return result;
@@ -1280,14 +1345,14 @@ export async function handleGetDependencyGraph(
   const nodesText = graph.nodes.map(n => `  - ${n.name} (${n.id}) [${n.status}]`).join('\n');
   const edgesText = graph.edges.map(e => `  - ${e.from} → ${e.to} (${e.type})`).join('\n');
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📊 Dependency Graph\n\n**Nodes (${graph.nodes.length}):**\n${nodesText}\n\n**Edges (${graph.edges.length}):**\n${edgesText}`
-      }
-    ]
+  const displayOutput = `📊 Dependency Graph\n\n**Nodes (${graph.nodes.length}):**\n${nodesText}\n\n**Edges (${graph.edges.length}):**\n${edgesText}`;
+  const data = {
+    workflowId: validated.workflowId,
+    nodes: graph.nodes.map(n => ({ id: n.id, name: n.name, status: n.status })),
+    edges: graph.edges.map(e => ({ from: e.from, to: e.to, type: e.type }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_dependency_graph');
 
   await logger.logToolRequest('get_dependency_graph', args, result);
   return result;
@@ -1306,31 +1371,47 @@ export async function handleExportMermaid(
 
   const mermaid = service.exportMermaid(validated.workflowId);
 
-  // If format is mmd, return text as before
+  // Generate default filename if not provided
+  const filename = validated.filename || `workflow-mermaid.${validated.format}`;
+  const filePath = path.resolve(filename);
+
+  // If format is mmd, save as text file and use new JSON response format
   if (validated.format === 'mmd') {
-    const result = {
-      content: [
-        {
-          type: 'text',
-          text: `📊 Mermaid Flowchart\n\n\`\`\`mermaid\n${mermaid}\n\`\`\``
-        }
-      ]
+    await fs.writeFile(filePath, mermaid, 'utf-8');
+    
+    const displayOutput = `📊 Mermaid diagram saved to: ${filePath}\n\n\`\`\`mermaid\n${mermaid}\n\`\`\``;
+    const data = {
+      filePath,
+      format: 'mmd',
+      mermaid
     };
+
+    const result = createSuccessResponse(data, displayOutput, 'export_mermaid');
 
     await logger.logToolRequest('export_mermaid', args, result);
     return result;
   }
 
-  // Render to PNG or SVG
+  // Render to PNG or SVG and return as image
   try {
     const rendered = await renderMermaid(mermaid, validated.format);
-
+    
+    // Decode base64 and save to file
+    const buffer = Buffer.from(rendered.data, 'base64');
+    await fs.writeFile(filePath, buffer);
+    
+    // Return image response for image formats
+    const mimeType = validated.format === 'png' ? 'image/png' : 'image/svg+xml';
     const result = {
       content: [
         {
           type: 'image',
           data: rendered.data,
-          mimeType: rendered.mimeType
+          mimeType
+        },
+        {
+          type: 'text',
+          text: `📊 Mermaid diagram saved to: ${filePath}`
         }
       ]
     };
@@ -1348,22 +1429,36 @@ export async function handleExportMermaid(
 export async function handleExportGraphImage(
   context: HandlerContext,
   args: Record<string, unknown>
-): Promise<{ content: Array<{ type: string; data: string; mimeType: string }> }> {
+): Promise<{ content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }> {
   const { service, logger } = context;
 
   const validated = ExportGraphImageSchema.parse(args);
 
   const mermaid = service.exportMermaid(validated.workflowId);
 
+  // Generate default filename if not provided
+  const filename = validated.filename || `workflow-graph.${validated.format}`;
+  const filePath = path.resolve(filename);
+
   try {
     const rendered = await renderMermaid(mermaid, validated.format);
-
+    
+    // Decode base64 and save to file
+    const buffer = Buffer.from(rendered.data, 'base64');
+    await fs.writeFile(filePath, buffer);
+    
+    // Return image response
+    const mimeType = validated.format === 'png' ? 'image/png' : 'image/svg+xml';
     const result = {
       content: [
         {
           type: 'image',
           data: rendered.data,
-          mimeType: rendered.mimeType
+          mimeType
+        },
+        {
+          type: 'text',
+          text: `📊 Graph image saved to: ${filePath}`
         }
       ]
     };
@@ -1393,14 +1488,18 @@ export async function handleGetBlockedTasks(
     return `  - **${bt.task.name}** (${bt.task.id})\n    **Blocking Dependencies:**\n${depsText}`;
   }).join('\n');
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `🚫 Blocked Tasks - ${blockedTasks.length} tasks\n\n${blockedTasks.length > 0 ? tasksText : 'No blocked tasks'}`
-      }
-    ]
+  const displayOutput = `🚫 Blocked Tasks - ${blockedTasks.length} tasks\n\n${blockedTasks.length > 0 ? tasksText : 'No blocked tasks'}`;
+  const data = {
+    workflowId: validated.workflowId,
+    count: blockedTasks.length,
+    blockedTasks: blockedTasks.map(bt => ({
+      taskId: bt.task.id,
+      taskName: bt.task.name,
+      blockingDeps: bt.blockingDeps
+    }))
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_blocked_tasks');
 
   await logger.logToolRequest('get_blocked_tasks', args, result);
   return result;
@@ -1424,14 +1523,17 @@ export async function handleGetCriticalPath(
     return task ? `  - ${task.name} (${task.id})` : `  - ${taskId} (not found)`;
   }).join('\n');
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `🛤️ Critical Path - ${criticalPath.length} tasks\n\n**Workflow ID:** ${validated.workflowId}\n**Path Length:** ${criticalPath.length}\n\n**Critical Path:**\n${pathText}`
-      }
-    ]
+  const displayOutput = `🛤️ Critical Path - ${criticalPath.length} tasks\n\n**Workflow ID:** ${validated.workflowId}\n**Path Length:** ${criticalPath.length}\n\n**Critical Path:**\n${pathText}`;
+  const data = {
+    workflowId: validated.workflowId,
+    pathLength: criticalPath.length,
+    criticalPath: criticalPath.map(taskId => {
+      const task = service.getTask(taskId);
+      return task ? { id: taskId, name: task.name } : { id: taskId, name: 'not found' };
+    })
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'get_critical_path');
 
   await logger.logToolRequest('get_critical_path', args, result);
   return result;
@@ -1474,14 +1576,18 @@ export async function handleExportWorkflowBundle(
     ? '(Bundle saved to file - use import_workflow_bundle to restore)'
     : JSON.stringify(bundle, null, 2);
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📦 Workflow Bundle Exported Successfully\n\n**Workflow Name:** ${bundle.templateName || bundle.workflow.name}\n**Bundle Version:** ${bundle.version}\n**Exported At:** ${bundle.exportedAt}\n**Tasks Included:** ${bundle.tasks.length}\n**Tags:** ${bundle.tags?.join(', ') || 'None'}\n**Human Readable Only:** ${bundle.humanReadableOnly ? 'Yes' : 'No'}${nameMapSummary}${fileSavedMessage}\n\n**Full Bundle (JSON):**\n\`\`\`json\n${bundleJson}\n\`\`\`\n\n**Usage:**\n${validated.filePath ? `File saved to ${validated.filePath}. Use import_workflow_bundle to restore it in a new session.` : 'Save this JSON to a file and use import_workflow_bundle to restore it in a new session.'}`
-      }
-    ]
+  const displayOutput = `📦 Workflow Bundle Exported Successfully\n\n**Workflow Name:** ${bundle.templateName || bundle.workflow.name}\n**Bundle Version:** ${bundle.version}\n**Exported At:** ${bundle.exportedAt}\n**Tasks Included:** ${bundle.tasks.length}\n**Tags:** ${bundle.tags?.join(', ') || 'None'}\n**Human Readable Only:** ${bundle.humanReadableOnly ? 'Yes' : 'No'}${nameMapSummary}${fileSavedMessage}\n\n**Full Bundle (JSON):**\n\`\`\`json\n${bundleJson}\n\`\`\`\n\n**Usage:**\n${validated.filePath ? `File saved to ${validated.filePath}. Use import_workflow_bundle to restore it in a new session.` : 'Save this JSON to a file and use import_workflow_bundle to restore it in a new session.'}`;
+  const data = {
+    workflowName: bundle.templateName || bundle.workflow.name,
+    bundleVersion: bundle.version,
+    exportedAt: bundle.exportedAt,
+    tasksIncluded: bundle.tasks.length,
+    tags: bundle.tags,
+    humanReadableOnly: bundle.humanReadableOnly,
+    filePath: validated.filePath
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'export_workflow_bundle');
 
   await logger.logToolRequest('export_workflow_bundle', args, result);
   return result;
@@ -1514,14 +1620,18 @@ export async function handleImportWorkflowBundle(
       }).join('\n') + (Object.keys(importResult.taskIdMap).length > 5 ? '\n  ...' : '')
     : Object.entries(importResult.taskIdMap).slice(0, 5).map(([oldId, newId]) => `  ${oldId} → ${newId}`).join('\n') + (Object.keys(importResult.taskIdMap).length > 5 ? '\n  ...' : '');
 
-  const result = {
-    content: [
-      {
-        type: 'text',
-        text: `📦 Workflow Bundle Imported Successfully\n\n**New Workflow ID:** ${importResult.newWorkflowId}\n**Workflow Name:** ${workflow?.name || 'Unknown'}\n**Tasks Imported:** ${Object.keys(importResult.taskIdMap).length}\n**Name Prefix:** ${validated.namePrefix || 'None'}\n**Deduplication Strategy:** ${validated.deduplication || 'none'}\n**Name Remapping:** ${validated.nameRemapping ? `${Object.keys(validated.nameRemapping).length} tasks remapped` : 'None'}\n\n**Task ID Mapping (sample):**\n${mappingSummary}\n\n**Next Steps:**\n- Use start_workflow_execution to begin executing the imported workflow\n- Or use list_tasks to see all imported tasks`
-      }
-    ]
+  const displayOutput = `📦 Workflow Bundle Imported Successfully\n\n**New Workflow ID:** ${importResult.newWorkflowId}\n**Workflow Name:** ${workflow?.name || 'Unknown'}\n**Tasks Imported:** ${Object.keys(importResult.taskIdMap).length}\n**Name Prefix:** ${validated.namePrefix || 'None'}\n**Deduplication Strategy:** ${validated.deduplication || 'none'}\n**Name Remapping:** ${validated.nameRemapping ? `${Object.keys(validated.nameRemapping).length} tasks remapped` : 'None'}\n\n**Task ID Mapping (sample):**\n${mappingSummary}\n\n**Next Steps:**\n- Use start_workflow_execution to begin executing the imported workflow\n- Or use list_tasks to see all imported tasks`;
+  const data = {
+    newWorkflowId: importResult.newWorkflowId,
+    workflowName: workflow?.name || 'Unknown',
+    tasksImported: Object.keys(importResult.taskIdMap).length,
+    namePrefix: validated.namePrefix,
+    deduplication: validated.deduplication,
+    nameRemapping: validated.nameRemapping ? Object.keys(validated.nameRemapping).length : 0,
+    taskIdMap: importResult.taskIdMap
   };
+
+  const result = createSuccessResponse(data, displayOutput, 'import_workflow_bundle');
 
   await logger.logToolRequest('import_workflow_bundle', args, result);
   return result;

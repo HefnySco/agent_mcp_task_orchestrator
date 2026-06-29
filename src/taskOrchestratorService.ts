@@ -2795,6 +2795,93 @@ export class TaskOrchestratorService {
   }
 
   /**
+   * Render the dependency graph as ASCII tree
+   * @param workflowId - Optional workflow ID to filter by
+   * @returns ASCII tree representation
+   */
+  renderAsciiTree(workflowId?: string): string {
+    const { nodes } = this.getDependencyGraph(workflowId);
+    
+    if (nodes.length === 0) {
+      return 'No tasks to display';
+    }
+
+    const lines: string[] = [];
+    lines.push(`Task Dependency Tree${workflowId ? ` (Workflow: ${workflowId})` : ''}`);
+    lines.push('');
+
+    // Build parent-child map
+    const parentToChildren = new Map<string, Task[]>();
+    const childToParent = new Map<string, string>();
+    const taskSet = new Set(nodes.map(n => n.id));
+
+    for (const node of nodes) {
+      if (node.parentTaskId) {
+        if (!parentToChildren.has(node.parentTaskId)) {
+          parentToChildren.set(node.parentTaskId, []);
+        }
+        parentToChildren.get(node.parentTaskId)!.push(node);
+        childToParent.set(node.id, node.parentTaskId);
+      }
+    }
+
+    // Identify root tasks (no parent or parent not in current graph)
+    const rootTasks = nodes.filter(node => {
+      if (!node.parentTaskId) return true;
+      return !taskSet.has(node.parentTaskId);
+    });
+
+    // Status icons
+    const getStatusIcon = (status: string): string => {
+      switch (status) {
+        case 'pending': return '○';
+        case 'in_progress': return '◐';
+        case 'completed': return '✓';
+        case 'failed': return '✗';
+        default: return '?';
+      }
+    };
+
+    // Format task label
+    const formatTaskLabel = (task: Task): string => {
+      const statusIcon = getStatusIcon(task.status);
+      const priorityBadge = task.priority ? ` [P:${task.priority}]` : '';
+      return `${statusIcon} ${task.name}${priorityBadge}`;
+    };
+
+    // Recursively render node
+    const renderNode = (taskId: string, prefix: string, isLast: boolean): void => {
+      const task = this.state.tasks.get(taskId);
+      if (!task) return;
+
+      lines.push(`${prefix}${isLast ? '└── ' : '├── '}${formatTaskLabel(task)}`);
+
+      const children = parentToChildren.get(taskId);
+      if (children) {
+        for (let i = 0; i < children.length; i++) {
+          const isLastChild = i === children.length - 1;
+          const childPrefix = prefix + (isLast ? '    ' : '│   ');
+          renderNode(children[i].id, childPrefix, isLastChild);
+        }
+      }
+    };
+
+    // Render all root tasks
+    for (let i = 0; i < rootTasks.length; i++) {
+      const isLast = i === rootTasks.length - 1;
+      renderNode(rootTasks[i].id, '', isLast);
+    }
+
+    // Add legend
+    lines.push('');
+    lines.push('Legend: ○=pending ◐=in_progress ✓=completed ✗=failed [P:priority]');
+    lines.push('');
+    lines.push(`Total tasks: ${nodes.length}`);
+
+    return lines.join('\n');
+  }
+
+  /**
    * Resolve a task identifier (name or ID) to a task ID
    * @param identifier - Task name (qualified or simple) or task ID
    * @param bundle - Workflow bundle for name resolution

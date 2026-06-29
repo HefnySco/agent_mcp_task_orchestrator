@@ -283,6 +283,13 @@ export const ExportMermaidSchema = z.object({
 });
 
 /**
+ * Zod schema for visualizing as ASCII tree
+ */
+export const VisualizeAsciiSchema = z.object({
+  workflowId: z.string().optional()
+});
+
+/**
  * Zod schema for exporting graph as image
  */
 export const ExportGraphImageSchema = z.object({

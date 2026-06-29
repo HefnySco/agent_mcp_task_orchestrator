@@ -37,6 +37,7 @@ import {
   MoveTaskSchema,
   GetDependencyGraphSchema,
   ExportMermaidSchema,
+  VisualizeAsciiSchema,
   ExportGraphImageSchema,
   ExportStrategyMermaidSchema,
   GetBlockedTasksSchema,
@@ -1384,6 +1385,31 @@ export async function handleGetDependencyGraph(
 }
 
 /**
+ * Visualize as ASCII tree handler
+ */
+export async function handleVisualizeAscii(
+  context: HandlerContext,
+  args: Record<string, unknown>
+): Promise<{ content: Array<{ type: string; text: string }> }> {
+  const { service, logger } = context;
+
+  const validated = VisualizeAsciiSchema.parse(args);
+
+  const asciiTree = service.renderAsciiTree(validated.workflowId);
+
+  const displayOutput = `📊 ASCII Tree Visualization\n\n\`\`\`\n${asciiTree}\n\`\`\``;
+  const data = {
+    workflowId: validated.workflowId,
+    asciiTree
+  };
+
+  const result = createSuccessResponse(data, displayOutput, 'visualize_ascii');
+
+  await logger.logToolRequest('visualize_ascii', args, result);
+  return result;
+}
+
+/**
  * Export Mermaid handler
  */
 export async function handleExportMermaid(
@@ -2093,6 +2119,7 @@ export const handlerRegistry: Record<string, (context: HandlerContext, args: Rec
   update_dependency: handleUpdateDependency,
   move_task: handleMoveTask,
   get_dependency_graph: handleGetDependencyGraph,
+  visualize_ascii: handleVisualizeAscii,
   export_mermaid: handleExportMermaid,
   export_graph_image: handleExportGraphImage,
   export_strategy_mermaid: handleExportStrategyMermaid,

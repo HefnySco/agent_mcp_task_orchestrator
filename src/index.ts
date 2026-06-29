@@ -721,6 +721,19 @@ class TaskOrchestratorMCPServer {
             }
           },
           {
+            name: 'visualize_ascii',
+            description: 'Visualize the dependency graph as an ASCII tree. Shows task hierarchy with status icons and priority badges.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                workflowId: {
+                  type: 'string',
+                  description: 'Optional workflow ID to filter by'
+                }
+              }
+            }
+          },
+          {
             name: 'export_mermaid',
             description: 'Export the dependency graph as a Mermaid flowchart diagram. **Generates an image (PNG) by default for display in the LLM chat.** Supports text (mmd), PNG, and SVG formats.',
             inputSchema: {

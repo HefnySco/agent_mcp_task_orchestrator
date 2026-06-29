@@ -76,8 +76,9 @@ export class JsonStorageAdapter implements IStorageAdapter {
 
       return { tasks, workflows, workflowRuns, strategies };
     } catch (err) {
-      // Only return empty state if file doesn't exist
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Return empty state if file doesn't exist or JSON is corrupted
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' || err instanceof SyntaxError) {
+        console.warn(`[JsonStorageAdapter] Storage file ${this.storagePath} is missing or corrupted. Starting with empty state.`);
         return {
           tasks: new Map(),
           workflows: new Map(),
@@ -85,7 +86,7 @@ export class JsonStorageAdapter implements IStorageAdapter {
           strategies: new Map()
         };
       }
-      // For any other error (including JSON corruption), fail fast
+      // For any other error, fail fast
       throw new StorageError('Failed to load state from JSON file', err instanceof Error ? err : undefined);
     }
   }
